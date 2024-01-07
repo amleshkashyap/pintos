@@ -67,6 +67,7 @@ timer_calibrate (void)
 }
 
 /* Returns the number of timer ticks since the OS booted. */
+/* Disables the interrupt to get the ticks, and then enables again (if was enabled earlier) - why is it required? */
 int64_t
 timer_ticks (void) 
 {
