@@ -1,0 +1,5 @@
+doc/WWW/
+src/misc/bochs-2.6.11.tar.gz
+src/utils/setitimer-helper.o
+src/utils/squish-pty.o
+src/utils/squish-unix.o
