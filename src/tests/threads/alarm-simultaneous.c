@@ -91,4 +91,5 @@ sleeper (void *test_)
       *test->output_pos++ = timer_ticks () - test->start;
       thread_yield ();
     }
+  printf("Done with sleeping\n");
 }
