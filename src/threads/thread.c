@@ -354,9 +354,6 @@ thread_yield (void)
   if (cur != idle_thread) 
     list_push_back (&ready_list, &cur->elem);
   cur->status = THREAD_READY;
-  if (cur->wakeup_at > 0) {
-    cur->status = THREAD_BLOCKED;
-  }
   schedule ();
   intr_set_level (old_level);
   struct thread *next = thread_current ();
@@ -569,11 +566,11 @@ next_thread_to_run (void)
   struct thread *next = list_entry (list_pop_front (&ready_list), struct thread, elem);
   struct thread *first = next;
 
-  if (next->status == THREAD_BLOCKED && next->wakeup_at >= timer_ticks() ) {
+  if (next->wakeup_at >= timer_ticks() ) {
     list_push_back (&ready_list, &next->elem);
     next = list_entry (list_pop_front (&ready_list), struct thread, elem);
     while (next != first) {
-      if (next->status == THREAD_BLOCKED && next->wakeup_at >= timer_ticks ()) {
+      if (next->wakeup_at >= timer_ticks ()) {
         list_push_back (&ready_list, &next->elem);
 	next = list_entry (list_pop_front (&ready_list), struct thread, elem);
         continue;
