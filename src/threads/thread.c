@@ -98,6 +98,7 @@ thread_init (void)
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
+  printf("First thread: %s, %d\n", initial_thread->name, initial_thread->tid);
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -123,6 +124,7 @@ void
 thread_tick (void) 
 {
   struct thread *t = thread_current ();
+  // printf("Thread tick for: %d at tick: %d\n", t->tid, timer_ticks ());
 
   /* Update statistics. */
   if (t == idle_thread)
@@ -182,6 +184,7 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
+  printf("Thread with name, tid %s, %d\n", t->name, tid);
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
@@ -201,7 +204,42 @@ thread_create (const char *name, int priority,
   /* Add to run queue. */
   thread_unblock (t);
 
+  priority_schedule(t);
+
   return tid;
+}
+
+/*
+*/
+void
+priority_schedule (struct thread *t)
+{
+  enum intr_level old_level;
+  old_level = intr_disable ();
+  struct thread *cur = thread_current ();
+  if (cur->priority < t->priority) {
+	  thread_yield ();
+  }
+  intr_set_level (old_level);
+}
+
+
+/*
+ */
+void
+donate_priority (void)
+{
+}
+
+void
+thread_make_sleep (int64_t new_wakeup_at)
+{
+  enum intr_level old_level;
+  old_level = intr_disable ();
+  struct thread *cur = thread_current ();
+  cur->wakeup_at = new_wakeup_at;
+  intr_set_level (old_level);
+  thread_yield ();
 }
 
 /* Puts the current thread to sleep.  It will not be scheduled
@@ -296,6 +334,12 @@ thread_exit (void)
   NOT_REACHED ();
 }
 
+uint64_t
+total_ticks (void)
+{
+  return (idle_ticks + kernel_ticks + user_ticks + thread_ticks);
+}
+
 /* Yields the CPU.  The current thread is not put to sleep and
    may be scheduled again immediately at the scheduler's whim. */
 void
@@ -310,8 +354,16 @@ thread_yield (void)
   if (cur != idle_thread) 
     list_push_back (&ready_list, &cur->elem);
   cur->status = THREAD_READY;
+  if (cur->wakeup_at > 0) {
+    cur->status = THREAD_BLOCKED;
+  }
   schedule ();
   intr_set_level (old_level);
+  struct thread *next = thread_current ();
+  ASSERT (cur->tid == next->tid);
+  // old_level = intr_disable ();
+  // printf("  thread_yield() for %d, ticks: %lld\n", cur->tid, total_ticks ());
+  // intr_set_level (old_level);
 }
 
 /* Invoke function 'func' on all threads, passing along 'aux'.
@@ -335,7 +387,26 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  thread_current ()->priority = new_priority;
+  struct thread *cur = thread_current();
+  cur->priority = new_priority;
+  printf("Current thread name, id and priority: %s, %d, %d\n", cur->name, cur->tid, cur->priority);
+  enum intr_level old_level;
+  old_level = intr_disable ();
+  struct list_elem *e;
+  bool yield = false;
+  for (e = list_begin (&ready_list); e != list_end (&ready_list); e = list_next (e)) {
+	  struct thread *t = list_entry (e, struct thread, elem);
+	  printf("Thread name, id and priority: %s, %d, %d\n", t->name, t->tid, t->priority);
+	  if (t->priority > new_priority) {
+		  printf("Thread %s is current but it will yield to %s\n", cur->name, t->name);
+		  yield = true;
+	  }
+  }
+  intr_set_level (old_level);
+  // yield the thread, method disables the interrupt
+  if (yield == true) {
+	  thread_yield ();
+  }
 }
 
 /* Returns the current thread's priority. */
@@ -463,6 +534,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
+  t->wakeup_at = 0;
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
@@ -490,10 +562,30 @@ alloc_frame (struct thread *t, size_t size)
 static struct thread *
 next_thread_to_run (void) 
 {
-  if (list_empty (&ready_list))
+  if (list_empty (&ready_list)) {
     return idle_thread;
-  else
-    return list_entry (list_pop_front (&ready_list), struct thread, elem);
+  }
+
+  struct thread *next = list_entry (list_pop_front (&ready_list), struct thread, elem);
+  struct thread *first = next;
+
+  if (next->status == THREAD_BLOCKED && next->wakeup_at >= timer_ticks() ) {
+    list_push_back (&ready_list, &next->elem);
+    next = list_entry (list_pop_front (&ready_list), struct thread, elem);
+    while (next != first) {
+      if (next->status == THREAD_BLOCKED && next->wakeup_at >= timer_ticks ()) {
+        list_push_back (&ready_list, &next->elem);
+	next = list_entry (list_pop_front (&ready_list), struct thread, elem);
+        continue;
+      }
+      break;
+    }
+    if (next == first) {
+      list_push_back (&ready_list, &next->elem);
+      return idle_thread;
+    }
+  }
+  return next;
 }
 
 /* Completes a thread switch by activating the new thread's page
@@ -516,6 +608,7 @@ void
 thread_schedule_tail (struct thread *prev)
 {
   struct thread *cur = running_thread ();
+  // printf("  thread_schedule_tail: current: %d, previous: %d\n", cur->tid, prev->tid);
   
   ASSERT (intr_get_level () == INTR_OFF);
 
@@ -549,10 +642,15 @@ thread_schedule_tail (struct thread *prev)
 
    It's not safe to call printf() until thread_schedule_tail()
    has completed. */
+/* the thread which is yielding the CPU is supposed to bear the cost of scheduling next thread too */
 static void
 schedule (void) 
 {
   struct thread *cur = running_thread ();
+  // printf is not safe because interrupt is disabled - enable it for debugging
+  // intr_enable();
+  // printf("  schedule(), cur thread: %d\n", cur->tid);
+  // intr_disable();
   struct thread *next = next_thread_to_run ();
   struct thread *prev = NULL;
 
@@ -563,6 +661,7 @@ schedule (void)
   if (cur != next)
     prev = switch_threads (cur, next);
   thread_schedule_tail (prev);
+  // printf("Scheduling completed for cur tid: %d and previous: %d\n", cur->tid, prev->tid);
 }
 
 /* Returns a tid to use for a new thread. */
@@ -576,9 +675,11 @@ allocate_tid (void)
   tid = next_tid++;
   lock_release (&tid_lock);
 
+  printf("Providing tid: %d\n", tid);
   return tid;
 }
 
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
+/* offsetof is a macro defined in lib/ to fetch the offset of a struct's member */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
