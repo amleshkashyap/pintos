@@ -109,7 +109,8 @@ thread_start (void)
   /* Create the idle thread. */
   struct semaphore idle_started;
   sema_init (&idle_started, 0);
-  thread_create ("idle", PRI_MIN, idle, &idle_started);
+  /* this is a hack to be compatible with priority scheduling - idle thread will never be scheduled otherwise */
+  thread_create ("idle", PRI_MAX, idle, &idle_started);
 
   /* Start preemptive thread scheduling. */
   intr_enable ();
@@ -204,13 +205,35 @@ thread_create (const char *name, int priority,
   /* Add to run queue. */
   thread_unblock (t);
 
-  priority_schedule(t);
+  /* Don't yield current thread during init
+   * Assumes idle thread always has tid = 2 */
+  if (t->tid > 2) {
+    priority_schedule (t);
+  }
 
   return tid;
 }
 
 /*
-*/
+ */
+void
+donate_priority (struct thread *holder, struct lock *l)
+{
+  struct thread *cur = thread_current ();
+  int cur_priority = cur->priority;
+  int holder_priority = holder->priority;
+  if (cur_priority > holder_priority) {
+    holder->priority = cur_priority;
+    if (holder->before_donation == -1) {
+      holder->before_donation = holder_priority;
+      holder->l = l;
+    }
+    ASSERT (intr_get_level () == INTR_OFF);
+    // printf("yielding from %d to %d, ticks: %d, priorities c: %d, old: %d, new: %d, at: %d\n", cur->tid, holder->tid, thread_ticks, cur_priority, holder_priority, holder->priority, timer_ticks ());
+    thread_yield ();
+  }
+}
+
 void
 priority_schedule (struct thread *t)
 {
@@ -218,17 +241,9 @@ priority_schedule (struct thread *t)
   old_level = intr_disable ();
   struct thread *cur = thread_current ();
   if (cur->priority < t->priority) {
-	  thread_yield ();
+    thread_yield ();
   }
   intr_set_level (old_level);
-}
-
-
-/*
- */
-void
-donate_priority (void)
-{
 }
 
 void
@@ -240,6 +255,20 @@ thread_make_sleep (int64_t new_wakeup_at)
   cur->wakeup_at = new_wakeup_at;
   intr_set_level (old_level);
   thread_yield ();
+}
+
+struct thread *
+get_ready_thread_by_tid (int tid)
+{
+  struct list_elem *e;
+  struct thread *t;
+  for(e = list_begin (&ready_list); e != list_end (&ready_list); e = list_next (e)) {
+    t = list_entry (e, struct thread, elem);
+    if (t->tid == tid) {
+      return t;
+    }
+  }
+  return NULL;
 }
 
 /* Puts the current thread to sleep.  It will not be scheduled
@@ -300,7 +329,9 @@ thread_current (void)
      have overflowed its stack.  Each thread has less than 4 kB
      of stack, so a few big automatic arrays or moderate
      recursion can cause stack overflow. */
-  ASSERT (is_thread (t));
+  ASSERT (t != NULL);
+  /* check when does a thread get corrupted - usually at the end of program */
+  ASSERT (t->magic == THREAD_MAGIC);
   ASSERT (t->status == THREAD_RUNNING);
 
   return t;
@@ -356,8 +387,8 @@ thread_yield (void)
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
-  struct thread *next = thread_current ();
-  ASSERT (cur->tid == next->tid);
+  // struct thread *next = thread_current ();
+  // ASSERT (cur->tid == next->tid);
   // old_level = intr_disable ();
   // printf("  thread_yield() for %d, ticks: %lld\n", cur->tid, total_ticks ());
   // intr_set_level (old_level);
@@ -385,24 +416,31 @@ void
 thread_set_priority (int new_priority) 
 {
   struct thread *cur = thread_current();
+  int old_priority = cur->priority;
   cur->priority = new_priority;
-  printf("Current thread name, id and priority: %s, %d, %d\n", cur->name, cur->tid, cur->priority);
+  // printf("Current thread name, id and priority: %s, %d, %d\n", cur->name, cur->tid, cur->priority);
+  /* if priority is increased, then don't check if scheduling is needed */
+  if (new_priority >= old_priority) {
+    return;
+  }
   enum intr_level old_level;
   old_level = intr_disable ();
   struct list_elem *e;
   bool yield = false;
+  struct thread *t;
   for (e = list_begin (&ready_list); e != list_end (&ready_list); e = list_next (e)) {
-	  struct thread *t = list_entry (e, struct thread, elem);
-	  printf("Thread name, id and priority: %s, %d, %d\n", t->name, t->tid, t->priority);
-	  if (t->priority > new_priority) {
-		  printf("Thread %s is current but it will yield to %s\n", cur->name, t->name);
-		  yield = true;
-	  }
+    t = list_entry (e, struct thread, elem);
+    // printf("Thread name, id and priority: %s, %d, %d\n", t->name, t->tid, t->priority);
+    if (t->priority > new_priority) {
+      // printf("Thread %s is current but it will yield to %s\n", cur->name, t->name);
+        yield = true;
+        break;
+    }
   }
   intr_set_level (old_level);
-  // yield the thread, method disables the interrupt
+  // yield the thread, method disables the interrupt - should this be inside the above block?
   if (yield == true) {
-	  thread_yield ();
+    thread_yield ();
   }
 }
 
@@ -459,6 +497,7 @@ idle (void *idle_started_ UNUSED)
   struct semaphore *idle_started = idle_started_;
   idle_thread = thread_current ();
   sema_up (idle_started);
+  idle_thread->priority = PRI_MIN;
 
   for (;;) 
     {
@@ -532,6 +571,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
   t->magic = THREAD_MAGIC;
   t->wakeup_at = 0;
+  t->before_donation = -1;
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
@@ -551,6 +591,57 @@ alloc_frame (struct thread *t, size_t size)
   return t->stack;
 }
 
+static struct thread *
+find_highest_priority_thread (void)
+{
+  enum intr_level old_level;
+  old_level = intr_disable ();
+  int max_priority = 0;
+  struct thread *next;
+  struct list_elem *e;
+  struct list_elem *t_max;
+  for (e = list_begin (&ready_list); e != list_end (&ready_list); e = list_next (e)) {
+    next = list_entry (e, struct thread, elem);
+    if (next->wakeup_at >= timer_ticks ()) {
+      continue;
+    }
+    if (t_max == NULL || next->priority > max_priority) {
+      t_max = e;
+      max_priority = next->priority;
+    }
+  }
+  if (t_max == NULL || t_max == list_tail (&ready_list) || t_max == list_head (&ready_list)) {
+    return idle_thread;
+  }
+  next = list_entry (t_max, struct thread, elem);
+  list_remove (&next->elem);
+  intr_set_level (old_level);
+  return next;
+}
+
+static struct thread *
+find_next_thread (struct thread *cur)
+{
+  int cur_priority = cur->priority;
+  struct list_elem *e;
+  struct list_elem *t;
+  struct thread *next;
+  for (e = list_begin (&ready_list); e != list_end (&ready_list); e = list_next(e)) {
+    next = list_entry (e, struct thread, elem);
+    if (next->wakeup_at >= timer_ticks () || next->priority < cur_priority) {
+      continue;
+    }
+    t = e;
+    break;
+  }
+  if (t == NULL || t == list_tail (&ready_list) || t == list_head (&ready_list)) {
+    ASSERT(is_thread (idle_thread));
+    return idle_thread;
+  }
+  list_remove (&next->elem);
+  return next;
+}
+
 /* Chooses and returns the next thread to be scheduled.  Should
    return a thread from the run queue, unless the run queue is
    empty.  (If the running thread can continue running, then it
@@ -563,26 +654,11 @@ next_thread_to_run (void)
     return idle_thread;
   }
 
-  struct thread *next = list_entry (list_pop_front (&ready_list), struct thread, elem);
-  struct thread *first = next;
-
-  if (next->wakeup_at >= timer_ticks() ) {
-    list_push_back (&ready_list, &next->elem);
-    next = list_entry (list_pop_front (&ready_list), struct thread, elem);
-    while (next != first) {
-      if (next->wakeup_at >= timer_ticks ()) {
-        list_push_back (&ready_list, &next->elem);
-	next = list_entry (list_pop_front (&ready_list), struct thread, elem);
-        continue;
-      }
-      break;
-    }
-    if (next == first) {
-      list_push_back (&ready_list, &next->elem);
-      return idle_thread;
-    }
+  struct thread *cur = running_thread ();
+  if (cur == idle_thread) {
+    return find_highest_priority_thread ();
   }
-  return next;
+  return find_next_thread (cur);
 }
 
 /* Completes a thread switch by activating the new thread's page
@@ -644,21 +720,20 @@ static void
 schedule (void) 
 {
   struct thread *cur = running_thread ();
-  // printf is not safe because interrupt is disabled - enable it for debugging
-  // intr_enable();
-  // printf("  schedule(), cur thread: %d\n", cur->tid);
-  // intr_disable();
   struct thread *next = next_thread_to_run ();
   struct thread *prev = NULL;
+  int cur_tid = cur->tid;
+  int next_tid = next->tid;
 
   ASSERT (intr_get_level () == INTR_OFF);
   ASSERT (cur->status != THREAD_RUNNING);
   ASSERT (is_thread (next));
 
-  if (cur != next)
+  if (cur != next) {
     prev = switch_threads (cur, next);
+  }
   thread_schedule_tail (prev);
-  // printf("Scheduling completed for cur tid: %d and previous: %d\n", cur->tid, prev->tid);
+  // printf("Schedule() - c: %d, n: %d, at: %d\n", cur_tid, next_tid, timer_ticks ());
 }
 
 /* Returns a tid to use for a new thread. */

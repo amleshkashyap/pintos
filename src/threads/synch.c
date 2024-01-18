@@ -66,11 +66,10 @@ sema_down (struct semaphore *sema)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
-  while (sema->value == 0) 
-    {
+  while (sema->value == 0) {
       list_push_back (&sema->waiters, &thread_current ()->elem);
       thread_block ();
-    }
+  }
   sema->value--;
   intr_set_level (old_level);
 }
@@ -113,9 +112,24 @@ sema_up (struct semaphore *sema)
   ASSERT (sema != NULL);
 
   old_level = intr_disable ();
-  if (!list_empty (&sema->waiters)) 
-    thread_unblock (list_entry (list_pop_front (&sema->waiters),
-                                struct thread, elem));
+  /* Find the highest priority thread at retrieval as priorities can be updated */
+  if (!list_empty (&sema->waiters)) {
+    struct list_elem *e, *t_max;
+    struct thread *t;
+    int max_priority = 0;
+    for (e = list_begin (&sema->waiters); e != list_end (&sema->waiters); e = list_next (e)) {
+      t = list_entry (e, struct thread, elem);
+      if (t_max == NULL || t->priority > max_priority) {
+        max_priority = t->priority;
+        t_max = e;
+      }
+    }
+    t = list_entry (t_max, struct thread, elem);
+    // printf("lock is released, waking up thread %s, %d with priority: %d, sema: %d\n", t->name, t->tid, t->priority, sema->value);
+    list_remove (&t->elem);
+    thread_unblock(t);
+  }
+
   sema->value++;
   intr_set_level (old_level);
 }
@@ -196,6 +210,16 @@ lock_acquire (struct lock *lock)
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
+  if (lock->holder != NULL) {
+    enum intr_level old_level;
+    old_level = intr_disable ();
+    // printf("Started lock acquisition at %d\n", timer_ticks ());
+    donate_priority (lock->holder, lock);
+    // printf("Donation\n");
+    intr_set_level (old_level);
+    // printf("Exiting\n");
+  }
+
   sema_down (&lock->semaphore);
   lock->holder = thread_current ();
 }
@@ -231,8 +255,20 @@ lock_release (struct lock *lock)
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
 
+  struct thread *prev = lock->holder;
   lock->holder = NULL;
   sema_up (&lock->semaphore);
+  enum intr_level old_level = intr_disable ();
+  /* TODO: this is a hack - there are multiple other locks, eg, tid and printf, which reset the priority
+   * need a better mechanism */
+  if (prev->before_donation != -1 && lock == prev->l) {
+    prev->priority = prev->before_donation;
+    prev->before_donation = -1;
+    prev->l = NULL;
+    // printf("Released priority by %d\n", prev->tid);
+    thread_yield();
+  }
+  intr_set_level (old_level);
 }
 
 /* Returns true if the current thread holds LOCK, false
