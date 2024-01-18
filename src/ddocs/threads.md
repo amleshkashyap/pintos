@@ -30,11 +30,13 @@
 ## Data Structures
   * ready\_list - list of threads ready to run, in THREAD\_READY state - retrieve/push via 'elem'
   * all\_list - all processes - added when first scheduled, removed when they exit - retrieve/push via 'allelem'
-  * initial\_thread
-  * idle\_thread - 
+  * initial\_thread - reference to the main thread with tid 1
+  * idle\_thread - reference to the idle thread with tid 2
   * tid\_lock - 
   * kernel\_thread\_frame - return address (eip), function to execute, arguments (aux)
   * list\_elem - struct containing previous and next elements of the list in which the element belongs
+  * semaphore - consists of value and list of waiters
+  * lock - consists of pointer to holder thread and semaphore whose value is initialized to 1
 
 
 ## Functions
@@ -45,23 +47,71 @@
     thread\_yield() refers to the execution of these methods for the thread being called upon.
     - Eg, a sleep() method which performs thread\_yield() means the sleeping thread is supposed to not do anything and simply yield the CPU
       for scheduling - at the end of thread\_yield(), current thread remains the same, suggesting the actual switch happens later.
-    - When a method is not called from a thread, then it has to be the first kernel thread with id-1.
+    - When a method is not called from a thread, then it has to be the first kernel thread with tid 1.
+    - When there's no thread in the ready list -> when will this happen? initial\_thread is killed at the end and will always be present
+      in the ready list.
     - Add debug statements to see which thread is current and which thread is running the schedule method during returning back CPU (yield)
+
+  * schedule - This method expects that the current running thread is not in RUNNING state anymore (which is done by thread\_yield,
+    thread\_block and thread\_exit methods - marks them READY, BLOCKED and DYING).
+    - It will find the next thread to be scheduled via next\_thread\_to\_run method - earlier, this method will simply return the first
+      thread in ready list and if the list is empty, it'll return the idle thread (which is initialised in main and does nothing but runs
+      an infinite loop where it calls the schedule method again.
+    - All the scheduling related code has to be tied up with finding the next thread to schedule.
+    - After finding the next thread, it will switch the threads, set the static thread\_tick variable to 0 (this variable is used to
+      perform thread switching based on timer interrupts, every 4 ticks ideally) and mark the selected thread as RUNNING.
+    - This method should be called with interrupts switched off as it needs to be sequential till completion - when any function is called
+      within this (eg, next\_thread\_to\_run, it needn't disable the interrupts, but good to assert as is done in tail).
+
+    - thread\_block -> ensures current thread is set to BLOCKED state, execution is not within external interrupt and interrupts are off
+      - sema\_down -> called by lock\_acquire and cond\_wait
+      - idle
+      - wait (interrupt queue)
+    - thread\_exit -> ensures current thread is set to DYING state, execution is not within external interrupt and interrupts are off
+      - kernel\_thread
+      - main - called only once
+    - thread\_yield -> ensures current thread is set to READY state, execution is not within external interrupt and interrupts are off
+      - intr\_handler -> called during any interrupt (primary: timer interrupts)
+      - O: timer\_sleep
+      - N: donate\_priority -> called only by lock\_acquire
+      - N: priority\_schedule -> called only by thread\_create
+      - N: thread\_make\_sleep -> called only by timer\_sleep
+      - N: thread\_set\_priority -> not called in code
+      - N: lock\_release -> called by - (1) allocate\_tid, (2) cond\_wait, (3) palloc\_get\_multiple, malloc, free, (4) getc, putc
+
+    - Most relevant scheduling workflows
+      - timer\_interrupt -> intr\_handler -> thread\_yield -> schedule -- round robin CPU scheduling
+      - functions (same as lock\_release)/user programs -> lock\_acquire -> sema\_down -> thread\_block -> schedule
+ 
+      - N: functions/user programs -> lock\_acquire -> donate\_priority -> thread\_yield -> schedule -- schedule after priority donation
+      - N: functions/user programs -> lock\_release -> thread\_yield -> schedule -- revoke priority after releasing lock
+      - N: thread\_create -> priority\_schedule -> thread\_yield -> schedule -- schedule high priority thread after creation
+
+      - N: user programs -> timer\_sleep -> thread\_make\_sleep -> thread\_yield -> schedule -- unschedule a sleeping thread
+      - N: user programs -> thread\_set\_priority (for running thread) -> thread\_yield -> schedule -- schedule after priority reduction
 
   * thread\_yield - finds the current thread using running\_thread method which uses assembly code to identify running thread information
     directly from the hardware.
     - Disables interrupts
-    - If the thread is not idle already, puts it at the back of ready list, and marks the thread is ready
-    - Calls the schedule method which might schedule it again
+    - If the thread is not idle already, puts it at the back of ready list, marks the thread as ready and calls schedule()
     - Sets interrupt back to the previous state
     - Method can be called by any thread (eg, via timer\_sleep)
 
+  * idle - This method is called only once by the idle thread - when it first gets the CPU, it sets a variable idle\_thread (during kernel
+    initialization) which is used later. After that, it runs an infinite loop - at the beginning of the loop, it calls the thread\_block
+    method which will perform scheduling. idle\_thread has tid 2.
+    - There's a similar method which sets a variable initial\_thread which is for the main thread with tid 1.
+
   * next\_thread\_to\_run - fetches the first thread from the ready list and schedules it. If none are present, then idle\_thread is
-    scheduled. idle\_thread simply runs an infinite loop at the beginning of while, it marks itself as blocked and calls schedule()
-    method.
-    - This method can be updated to implement the sleep() method -> mark the sleeping thread as blocked and update a struct member to
-      when it's supposed to wake up - when this method is run, it'll ignore all blocked threads whose wakeup time is in future and push
-      them back to the ready list - if all threads in the ready list are sleeping, it'll return the idle\_thread.
-    - Other way I could think of is to maintain another list of blocked threads - at every timer interrupt, all the threads in that list
-      are evaluated for being qualified to return back to ready list - it would have the same complexity but would require introducing
-      and maintaining another data structure.
+    scheduled. It's modified to do the scheduling in 2 ways -
+    - If idle\_thread has the context, then it must yield to the highest priority thread which is not sleeping.
+      - If no non-sleeping thread is found, then schedule idle\_thread again
+    - Otherwise, find a non-sleeping thread with a higher priority
+      - If no such thread is found, schedule idle\_thread again - let's say a higher priority thread exists but its sleeping, then this
+        method will schedule a lower priority thread -> this maybe incorrect. Also, if there are only lower priority threads, then the
+        current thread could've been rescheduled - this is inefficient, but in the next scheduling cycle, that's remedied so not too bad.
+    - The implementation for sleeping doesn't remove a thread from the ready list for now, but it ideally should for decoupling various
+      additional scheduling strategies that need to be implemented.
+
+  * At the time of this writing, priority-donate-one and priority-change tests were working, however, alarm-simultaneous (which was working
+    earlier) had regressed.
