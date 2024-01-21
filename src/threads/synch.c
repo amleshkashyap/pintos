@@ -213,7 +213,7 @@ lock_acquire (struct lock *lock)
   if (lock->holder != NULL) {
     enum intr_level old_level;
     old_level = intr_disable ();
-    // printf("Started lock acquisition at %d\n", timer_ticks ());
+    // printf("Started lock acquisition at %d, for holder: %d, %s\n", timer_ticks (), lock->holder->tid, lock->holder->name);
     donate_priority (lock->holder, lock);
     // printf("Donation\n");
     intr_set_level (old_level);
@@ -221,7 +221,13 @@ lock_acquire (struct lock *lock)
   }
 
   sema_down (&lock->semaphore);
-  lock->holder = thread_current ();
+  enum intr_level old_level = intr_disable ();
+  struct thread *cur = thread_current ();
+  lock->holder = cur;
+  if (cur->donated_priority != -1 && cur->l == lock) {
+    reset_donated_priority (cur);
+  }
+  intr_set_level (old_level);
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
@@ -257,15 +263,13 @@ lock_release (struct lock *lock)
 
   struct thread *prev = lock->holder;
   lock->holder = NULL;
-  sema_up (&lock->semaphore);
   enum intr_level old_level = intr_disable ();
+  sema_up (&lock->semaphore);
   /* TODO: this is a hack - there are multiple other locks, eg, tid and printf, which reset the priority
    * need a better mechanism */
-  if (prev->before_donation != -1 && lock == prev->l) {
-    prev->priority = prev->before_donation;
-    prev->before_donation = -1;
-    prev->l = NULL;
-    // printf("Released priority by %d\n", prev->tid);
+  if (prev->donations_held != 0 && lock == prev->l) {
+    // reset_donated_priority (prev);
+    // printf("Released priority by %d, %s\n", prev->tid, prev->name);
     thread_yield();
   }
   intr_set_level (old_level);
