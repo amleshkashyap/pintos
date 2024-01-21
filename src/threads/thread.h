@@ -101,9 +101,20 @@ struct thread
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
     int64_t wakeup_at;
+    // struct list donation_list;
     int before_donation;
+    int donated_priority;
+    tid_t donated_to;
     struct lock *l;
+    int donations_held;
   };
+
+struct donations
+{
+  tid_t tid;
+  struct lock *l;
+  int before_donation;
+};
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
@@ -121,11 +132,12 @@ tid_t thread_create (const char *name, int priority, thread_func *, void *);
 
 void priority_schedule (struct thread *);
 void donate_priority (struct thread *, struct lock *);
+void reset_donated_priority (struct thread *);
 
 void thread_make_sleep (int64_t);
 uint64_t total_ticks (void);
 
-struct thread * get_ready_thread_by_tid (int);
+struct thread * get_thread_by_tid (int);
 
 void thread_block (void);
 void thread_unblock (struct thread *);
