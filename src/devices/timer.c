@@ -172,9 +172,17 @@ timer_interrupt (struct intr_frame *args UNUSED)
 {
   // with TIMER_FREQ 100, this printf will lead to loss of other print statements
   // even with the min value of 19, the output is very difficult to read if done every tick
-  // if (ticks%TIMER_FREQ == 0) {
-    // printf("Timer interrupt at %lld\n", ticks);
-  // }
+  if (thread_mlfqs) {
+    thread_recent_cpu_tick ();
+
+    if (ticks%TIMER_FREQ == 0) {
+      thread_set_load_avg ();
+      thread_update_all_recent_cpu ();
+      // printf("Timer interrupt at %lld\n", ticks);
+    } else if (ticks%4 == 0) {
+      thread_update_all_priorities ();
+    }
+  }
   ticks++;
   thread_tick ();
 }
