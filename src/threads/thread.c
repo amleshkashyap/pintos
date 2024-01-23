@@ -63,7 +63,7 @@ static void kernel_thread (thread_func *, void *aux);
 
 static void idle (void *aux UNUSED);
 static struct thread *running_thread (void);
-static struct thread *next_thread_to_run (void);
+static struct thread *next_thread_to_run (struct thread *);
 static void init_thread (struct thread *, const char *name, int priority);
 static bool is_thread (struct thread *) UNUSED;
 static void *alloc_frame (struct thread *, size_t size);
@@ -257,7 +257,6 @@ donate_priority (struct thread *cur, struct thread *holder, struct lock *l)
   }
 
   ASSERT (cur->donations_made == 0);
-  ASSERT (cur->donated_for == NULL);
   ASSERT(holder->donations_made <= 7);
 
   cur->donated_for = l;
@@ -310,8 +309,7 @@ priority_schedule (struct thread *t)
 void
 thread_make_sleep (int64_t new_wakeup_at)
 {
-  enum intr_level old_level;
-  old_level = intr_disable ();
+  enum intr_level old_level = intr_disable ();
   struct thread *cur = thread_current ();
   cur->wakeup_at = new_wakeup_at;
   intr_set_level (old_level);
@@ -447,12 +445,8 @@ thread_yield (void)
     list_push_back (&ready_list, &cur->elem);
   cur->status = THREAD_READY;
   schedule ();
+  // printf("yield() for %d, at: %d, wake: %lld\n", cur->tid, timer_ticks (), cur->wakeup_at);
   intr_set_level (old_level);
-  // struct thread *next = thread_current ();
-  // ASSERT (cur->tid == next->tid);
-  // old_level = intr_disable ();
-  // printf("  thread_yield() for %d, ticks: %lld\n", cur->tid, total_ticks ());
-  // intr_set_level (old_level);
 }
 
 /* Invoke function 'func' on all threads, passing along 'aux'.
@@ -668,25 +662,26 @@ static struct thread *
 find_highest_priority_thread (void)
 {
   enum intr_level old_level = intr_disable ();
-  int max_priority = 0;
+  int max_priority = -1;
   struct thread *next;
-  struct list_elem *e;
+  struct list_elem *it;
   struct list_elem *t_max;
-  for (e = list_begin (&ready_list); e != list_end (&ready_list); e = list_next (e)) {
-    next = list_entry (e, struct thread, elem);
-    if (next->wakeup_at >= timer_ticks () || next->status == THREAD_BLOCKED) {
+  for (it = list_begin (&ready_list); it != list_end (&ready_list); it = list_next (it)) {
+    next = list_entry (it, struct thread, elem);
+    if (next->wakeup_at >= timer_ticks () || next->status != THREAD_READY) {
       continue;
     }
-    if (t_max == NULL || next->priority >= max_priority) {
-      t_max = e;
+    if (next->priority >= max_priority) {
+      t_max = it;
       max_priority = next->priority;
     }
   }
-  if (t_max == NULL || t_max == list_tail (&ready_list) || t_max == list_head (&ready_list)) {
+  if (max_priority == -1) {
     return idle_thread;
   }
   next = list_entry (t_max, struct thread, elem);
-  list_remove (&next->elem);
+  ASSERT (is_thread (next));
+  list_remove (t_max);
   intr_set_level (old_level);
   return next;
 }
@@ -696,26 +691,26 @@ find_next_thread (struct thread *cur)
 {
   enum intr_level old_level = intr_disable ();
   int cur_priority = cur->priority;
-  struct list_elem *e;
+  bool found = false;
+  struct list_elem *it;
   struct list_elem *t;
   struct thread *next;
-  for (e = list_begin (&ready_list); e != list_end (&ready_list); e = list_next(e)) {
-    next = list_entry (e, struct thread, elem);
-    if (next->wakeup_at >= timer_ticks () || next->status == THREAD_BLOCKED || next->priority < cur_priority) {
+  for (it = list_begin (&ready_list); it != list_end (&ready_list); it = list_next (it)) {
+    next = list_entry (it, struct thread, elem);
+    if (next->wakeup_at >= timer_ticks () || next->status != THREAD_READY || next->priority < cur_priority) {
       continue;
     }
-    t = e;
+    found = true;
+    t = it;
     break;
   }
-  if (t == NULL || t == list_tail (&ready_list) || t == list_head (&ready_list)) {
+  if (found == false) {
     ASSERT(is_thread (idle_thread));
     return idle_thread;
   }
   next = list_entry (t, struct thread, elem);
-  // if (next->priority < cur->priority) {
-    // return cur;
-  // }
-  list_remove (&next->elem);
+  ASSERT (is_thread (next));
+  list_remove (t);
   intr_set_level (old_level);
   return next;
 }
@@ -726,13 +721,12 @@ find_next_thread (struct thread *cur)
    will be in the run queue.)  If the run queue is empty, return
    idle_thread. */
 static struct thread *
-next_thread_to_run (void) 
+next_thread_to_run (struct thread *cur) 
 {
   if (list_empty (&ready_list)) {
     return idle_thread;
   }
 
-  struct thread *cur = running_thread ();
   if (cur == idle_thread) {
     return find_highest_priority_thread ();
   }
@@ -798,7 +792,7 @@ static void
 schedule (void) 
 {
   struct thread *cur = running_thread ();
-  struct thread *next = next_thread_to_run ();
+  struct thread *next = next_thread_to_run (cur);
   struct thread *prev = NULL;
   int cur_tid = cur->tid;
   int next_tid = next->tid;

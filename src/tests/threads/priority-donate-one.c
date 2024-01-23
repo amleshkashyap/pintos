@@ -49,11 +49,8 @@ static void
 acquire1_thread_func (void *lock_) 
 {
   struct lock *lock = lock_;
-  msg ("started executing acquire1, t1 priority is: %d, tick: %d", get_ready_thread_by_tid (1)->priority, timer_ticks ());
 
   lock_acquire (lock);
-  // ASSERT (get_ready_thread_by_tid (1)->priority == PRI_DEFAULT + 1);
-  // msg ("acq1, t1 priority is: %d", get_ready_thread_by_tid (1)->priority);
   msg ("acquire1: got the lock");
   lock_release (lock);
   msg ("acquire1: done");
@@ -63,11 +60,8 @@ static void
 acquire2_thread_func (void *lock_) 
 {
   struct lock *lock = lock_;
-  msg ("started executing acquire2, t1 priority is: %d, tick: %d", get_ready_thread_by_tid (1)->priority, timer_ticks ());
 
   lock_acquire (lock);
-  // ASSERT (get_ready_thread_by_tid (1)->priority == PRI_DEFAULT + 1);
-  // msg ("acq2, t1 priority is: %d", get_ready_thread_by_tid (1)->priority);
   msg ("acquire2: got the lock");
   lock_release (lock);
   msg ("acquire2: done");

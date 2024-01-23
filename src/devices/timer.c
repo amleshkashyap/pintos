@@ -93,10 +93,7 @@ timer_sleep (int64_t ticks)
   int64_t start = timer_ticks ();
 
   ASSERT (intr_get_level () == INTR_ON);
-  // struct thread *cur = thread_current();
-  // printf("timer_sleep has been called on tid %d for %lld ticks, starting at %lld tick\n", cur->tid, ticks, start);
   thread_make_sleep (start + ticks);
-  // printf("completed sleeping for %d, ticks: %lld, curtick: %lld\n", cur->tid, (timer_ticks() - start), timer_ticks());
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
