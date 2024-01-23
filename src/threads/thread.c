@@ -217,41 +217,80 @@ thread_create (const char *name, int priority,
 void
 reset_donated_priority (struct thread *cur)
 {
-  struct thread *t = get_thread_by_tid (cur->donated_to);
-  ASSERT (t != NULL);
-  t->donations_held -= 1;
-  t->priority = cur->donated_priority;
-  t->l = NULL;
-  if (t->donations_held == 0 && t->before_donation != -1) {
-    t->priority = t->before_donation;
-    t->before_donation = -1;
+  int donations_made = cur->donations_made;
+  if (donations_made <= 0) {
+    return;
   }
-  cur->donated_priority = -1;
-  cur->l = NULL;
+
+  struct thread *t;
+  tid_t tid;
+  for (int i = 0; i < donations_made; i++) {
+    tid = cur->donated_to[i];
+    t = get_thread_by_tid (tid);
+    t->donations_held--;
+    if (t->donations_held == 0) {
+      t->priority = t->actual_priority;
+    } else {
+      t->priority = cur->donated_priority[i];
+    }
+    cur->donated_priority[i] = -1;
+    cur->donated_to[i] = -1;
+  }
+
+  cur->donations_made = 0;
+  cur->donated_for = NULL;
 }
 
 /*
  * This has to be called with interrupts switched off
  */
 void
-donate_priority (struct thread *holder, struct lock *l)
+donate_priority (struct thread *cur, struct thread *holder, struct lock *l)
 {
   ASSERT (intr_get_level () == INTR_OFF);
-  // ASSERT (depth < 8);
 
-  struct thread *cur = thread_current ();
   int cur_priority = cur->priority;
   int holder_priority = holder->priority;
-  if (cur_priority > holder_priority) {
-    holder->priority = cur_priority;
-    holder->donations_held += 1;
-    holder->l = l;
-    cur->donated_to = holder->tid;
-    cur->donated_priority = holder_priority;
-    cur->l = l;
+
+  if (cur_priority <= holder_priority) {
+    return;
+  }
+
+  ASSERT (cur->donations_made == 0);
+  ASSERT (cur->donated_for == NULL);
+  ASSERT(holder->donations_made <= 7);
+
+  cur->donated_for = l;
+  cur->donations_made++;
+  cur->donated_to[0] = holder->tid;
+  cur->donated_priority[0] = holder_priority;
+
+  holder->priority = cur_priority;
+  holder->donations_held += 1;
+
+  // printf("yielding from %d to %d, ticks: %d, priorities c: %d, old: %d, new: %d, at: %d\n", cur->tid, holder->tid, thread_ticks, cur_priority, holder_priority, holder->priority, timer_ticks ());
+
+  if (holder->donations_made <= 0) {
+    thread_yield();
+  } else {
+    struct thread *t;
+    tid_t tid;
+
     ASSERT (intr_get_level () == INTR_OFF);
-    // printf("yielding from %d to %d, ticks: %d, priorities c: %d, old: %d, new: %d, at: %d\n", cur->tid, holder->tid, thread_ticks, cur_priority, holder_priority, holder->priority, timer_ticks ());
-    thread_yield ();
+    for (int i = 0; i < holder->donations_made; i++) {
+      tid = holder->donated_to[i];
+      t = get_thread_by_tid (tid);
+      ASSERT (is_thread (t));
+
+      cur->donations_made++;
+      cur->donated_to[i+1] = tid;
+      cur->donated_priority[i+1] = t->priority;
+
+      t->priority = cur_priority;
+      t->donations_held++;
+    }
+
+    thread_yield();
   }
 }
 
@@ -440,12 +479,13 @@ thread_set_priority (int new_priority)
   struct thread *cur = thread_current();
   int old_priority = cur->priority;
   // If thread has a donated priority, it shouldn't be able to lower its priority right now
-  if (cur->before_donation != -1 && new_priority < cur->priority) {
-    cur->before_donation = new_priority;
+  if (cur->priority != cur->actual_priority && new_priority < cur->priority) {
+    cur->actual_priority = new_priority;
     return;
   }
 
   cur->priority = new_priority;
+  cur->actual_priority = new_priority;
   // printf("Current thread name, id and priority: %s, %d, %d\n", cur->name, cur->tid, cur->priority);
   /* if priority is increased, then don't check if scheduling is needed */
   if (new_priority >= old_priority) {
@@ -525,6 +565,7 @@ idle (void *idle_started_ UNUSED)
   struct semaphore *idle_started = idle_started_;
   idle_thread = thread_current ();
   idle_thread->priority = PRI_MIN;
+  idle_thread->actual_priority = PRI_MIN;
   sema_up (idle_started);
 
   for (;;) 
@@ -598,11 +639,11 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  t->actual_priority = priority;
   t->magic = THREAD_MAGIC;
   t->wakeup_at = 0;
-  t->before_donation = -1;
-  t->donated_priority = -1;
   t->donations_held = 0;
+  t->donations_made = 0;
   // list_init (&t->donation_list);
 
   old_level = intr_disable ();
