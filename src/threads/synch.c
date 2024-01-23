@@ -114,14 +114,15 @@ sema_up (struct semaphore *sema)
   old_level = intr_disable ();
   /* Find the highest priority thread at retrieval as priorities can be updated */
   if (!list_empty (&sema->waiters)) {
-    struct list_elem *e, *t_max;
+    struct list_elem *it;
+    struct list_elem *t_max;
     struct thread *t;
-    int max_priority = 0;
-    for (e = list_begin (&sema->waiters); e != list_end (&sema->waiters); e = list_next (e)) {
-      t = list_entry (e, struct thread, elem);
-      if (t_max == NULL || t->priority > max_priority) {
+    int max_priority = -1;
+    for (it = list_begin (&sema->waiters); it != list_end (&sema->waiters); it = list_next (it)) {
+      t = list_entry (it, struct thread, elem);
+      if (t->priority > max_priority) {
         max_priority = t->priority;
-        t_max = e;
+        t_max = it;
       }
     }
     t = list_entry (t_max, struct thread, elem);
