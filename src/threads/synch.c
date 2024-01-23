@@ -211,7 +211,7 @@ lock_acquire (struct lock *lock)
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
-  if (lock->holder != NULL) {
+  if (!thread_mlfqs && lock->holder != NULL) {
     enum intr_level old_level;
     old_level = intr_disable ();
     // printf("Started lock acquisition at %d, for holder: %d, %s\n", timer_ticks (), lock->holder->tid, lock->holder->name);
@@ -226,7 +226,7 @@ lock_acquire (struct lock *lock)
   enum intr_level old_level = intr_disable ();
   struct thread *cur = thread_current ();
   lock->holder = cur;
-  if (cur->donations_made > 0 && cur->donated_for == lock) {
+  if (!thread_mlfqs && cur->donations_made > 0 && cur->donated_for == lock) {
     reset_donated_priority (cur);
   }
   intr_set_level (old_level);
@@ -267,9 +267,8 @@ lock_release (struct lock *lock)
   lock->holder = NULL;
   enum intr_level old_level = intr_disable ();
   sema_up (&lock->semaphore);
-  /* TODO: this is a hack - there are multiple other locks, eg, tid and printf, which reset the priority
-   * need a better mechanism */
-  if (prev->donations_held > 0) {
+  // TODO: can this be removed
+  if (!thread_mlfqs && prev->donations_held > 0) {
     thread_yield();
   }
   intr_set_level (old_level);
