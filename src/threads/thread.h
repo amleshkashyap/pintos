@@ -135,6 +135,8 @@ void reset_donated_priority (struct thread *);
 
 /* sleep without busy waiting */
 void thread_make_sleep (int64_t);
+void thread_wakeup (struct thread *);
+struct thread * find_next_thread (struct thread *);
 
 /* utility */
 uint64_t total_ticks (void);
@@ -167,5 +169,7 @@ void thread_set_recent_cpu (struct thread *t);
 void thread_update_all_priorities (void);
 void thread_recent_cpu_tick (void);
 void thread_update_all_recent_cpu (void);
+
+int all_ready_threads (void);
 
 #endif /* threads/thread.h */

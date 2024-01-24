@@ -118,6 +118,50 @@ test_mlfqs_load_60 (void)
   
   ASSERT (thread_mlfqs);
 
+  /* validate individual methods */
+  /* fxpoint - div, mult
+   * int - mult, add, sub
+   * conversion - fxtoi_nearest
+  */
+  fxpoint t1 = div_fxpoint (59, 60);
+  fxpoint t1_1 = mult_fxpoint_int (t1, 100);
+  int t1_2 = fxtoi_nearest (t1_1);
+  fxpoint t2 = div_fxpoint (1, 60);
+  fxpoint t3 = mult_fxpoint_int (mult_fxpoint (t1, t1), 100);
+  int t4 = fxtoi_nearest (t3);
+  fxpoint t5 = mult_fxpoint_int (add_fxpoint_int (t1, 1), 100);
+  int t6 = fxtoi_nearest (t5);
+  fxpoint t7 = mult_fxpoint_int (sub_fxpoint_int (t1, 1), 100);
+  int t8 = fxtoi_nearest (t7);
+
+  ASSERT (t1 == 16110);
+  ASSERT (t1_2 == 98);
+  ASSERT (load_avg_coeff == t1);
+  // ASSERT (t3 == 1584200);
+  ASSERT (t4 == 97);
+  ASSERT (t5 == 3249400);  // (16110 + 16384)*100
+  ASSERT (t6 == 198);
+  ASSERT (t7 == -27400);   // (16110 - 16384)*100
+  ASSERT (t8 == -2);
+
+  msg ("59/60: %lld, int: %d, float: %d.%02d\n\
+	1/60: %lld\n\
+	1/4: %lld\n\
+        1: %lld\n\
+        load_coeff: %lld\n\
+        (59/60)*(59/60)*100: %lld, int: %d, float: %d.%02d\n\
+        ((59/60)+1)*100: %lld, int: %d, float: %d.%02d\n\
+        ((59/60)-1)*100: %lld, int: %d, float: %d.%02d",
+       t1, t1_2, t1_2 / 100, t1_2 % 100,
+       t2,
+       div_fxpoint (1, 4),
+       get_fxpoint (1),
+       load_avg_coeff,
+       t3, t4, t4 / 100, t4 % 100,
+       t5, t6, t6 / 100, t6 % 100,
+       t7, t8, t8 / 100, t8 %100);
+  //
+
   start_time = timer_ticks ();
   msg ("Starting %d niced load threads...", THREAD_CNT);
   for (i = 0; i < THREAD_CNT; i++) 
@@ -135,8 +179,8 @@ test_mlfqs_load_60 (void)
       int load_avg;
       timer_sleep (sleep_until - timer_ticks ());
       load_avg = thread_get_load_avg ();
-      msg ("After %d seconds, load average=%d.%02d.",
-           i * 2, load_avg / 100, load_avg % 100);
+      msg ("After %d seconds, load average=%d.%02d. ready: %d",
+           i * 2, load_avg / 100, load_avg % 100, all_ready_threads ());
     }
 }
 
