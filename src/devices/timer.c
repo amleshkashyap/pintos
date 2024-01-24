@@ -93,7 +93,7 @@ timer_sleep (int64_t ticks)
   int64_t start = timer_ticks ();
 
   ASSERT (intr_get_level () == INTR_ON);
-  thread_make_sleep (start + ticks);
+  thread_make_sleep (start + ticks - 1);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -170,20 +170,18 @@ timer_print_stats (void)
 static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
-  // with TIMER_FREQ 100, this printf will lead to loss of other print statements
-  // even with the min value of 19, the output is very difficult to read if done every tick
+  ticks++;
   if (thread_mlfqs) {
     thread_recent_cpu_tick ();
 
     if (ticks%TIMER_FREQ == 0) {
       thread_set_load_avg ();
       thread_update_all_recent_cpu ();
-      // printf("Timer interrupt at %lld\n", ticks);
+      thread_update_all_priorities ();
     } else if (ticks%4 == 0) {
       thread_update_all_priorities ();
     }
   }
-  ticks++;
   thread_tick ();
 }
 

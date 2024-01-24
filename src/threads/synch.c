@@ -112,12 +112,12 @@ sema_up (struct semaphore *sema)
   ASSERT (sema != NULL);
 
   old_level = intr_disable ();
+  int max_priority = -1;
   /* Find the highest priority thread at retrieval as priorities can be updated */
   if (!list_empty (&sema->waiters)) {
     struct list_elem *it;
     struct list_elem *t_max;
     struct thread *t;
-    int max_priority = -1;
     for (it = list_begin (&sema->waiters); it != list_end (&sema->waiters); it = list_next (it)) {
       t = list_entry (it, struct thread, elem);
       if (t->priority > max_priority) {
@@ -127,11 +127,14 @@ sema_up (struct semaphore *sema)
     }
     t = list_entry (t_max, struct thread, elem);
     // printf("lock is released, waking up thread %s, %d with priority: %d, sema: %d\n", t->name, t->tid, t->priority, sema->value);
-    list_remove (&t->elem);
+    list_remove (t_max);
     thread_unblock(t);
   }
 
   sema->value++;
+  if (max_priority > thread_current ()->priority) {
+    thread_yield ();
+  }
   intr_set_level (old_level);
 }
 
@@ -214,12 +217,9 @@ lock_acquire (struct lock *lock)
   if (!thread_mlfqs && lock->holder != NULL) {
     enum intr_level old_level;
     old_level = intr_disable ();
-    // printf("Started lock acquisition at %d, for holder: %d, %s\n", timer_ticks (), lock->holder->tid, lock->holder->name);
     struct thread *cur = thread_current ();
     donate_priority (cur, lock->holder, lock);
-    // printf("Donation\n");
     intr_set_level (old_level);
-    // printf("Exiting\n");
   }
 
   sema_down (&lock->semaphore);
@@ -267,7 +267,6 @@ lock_release (struct lock *lock)
   lock->holder = NULL;
   enum intr_level old_level = intr_disable ();
   sema_up (&lock->semaphore);
-  // TODO: can this be removed
   if (!thread_mlfqs && prev->donations_held > 0) {
     thread_yield();
   }

@@ -59,11 +59,11 @@ static unsigned thread_ticks;   /* # of timer ticks since last yield. */
    Controlled by kernel command-line option "-o mlfqs". */
 bool thread_mlfqs;
 
-static struct list *multilevel_lists[PRI_MAX];
+static struct list *multilevel_lists[PRI_MAX+1];
 
 /* initialized to 0 */
-static int ready_threads;
-static fxpoint load_average;
+static int ready_threads = 0;
+static fxpoint load_average = 0;
 
 static void kernel_thread (thread_func *, void *aux);
 
@@ -100,7 +100,7 @@ thread_init (void)
   list_init (&all_list);
 
   if (thread_mlfqs) {
-    for (int i = 0; i < PRI_MAX; i++) {
+    for (int i = 0; i <= PRI_MAX; i++) {
       static struct list tlist;
       list_init (&tlist);
       multilevel_lists[i] = &tlist;
@@ -199,7 +199,7 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
-  printf("Thread with name, tid %s, %d\n", t->name, tid);
+  // printf("Thread with name, tid %s, %d\n", t->name, tid);
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
@@ -222,7 +222,12 @@ thread_create (const char *name, int priority,
   /* Don't yield current thread during init
    * Assumes idle thread always has tid = 2 */
   if (t->tid > 2) {
-    priority_schedule (t);
+    if (!thread_mlfqs) {
+      priority_schedule (t);
+    } else {
+      t->priority = thread_current ()->priority;
+      t->actual_priority = t->priority;
+    }
   }
 
   return tid;
@@ -243,7 +248,7 @@ reset_donated_priority (struct thread *cur)
     tid = cur->donated_to[i];
     t = get_thread_by_tid (tid);
     t->donations_held--;
-    if (t->donations_held == 0) {
+    if (t->donations_held <= 0) {
       t->priority = t->actual_priority;
     } else {
       t->priority = cur->donated_priority[i];
@@ -371,7 +376,7 @@ thread_block (void)
 
   struct thread *cur = thread_current ();
   cur->status = THREAD_BLOCKED;
-  if (cur != idle_thread) ready_threads--;
+  if (cur->tid != 2) ready_threads--;
   schedule ();
 }
 
@@ -394,9 +399,10 @@ thread_unblock (struct thread *t)
   ASSERT (t->status == THREAD_BLOCKED);
 
   if (thread_mlfqs) {
-    ready_threads++;
+    if (t->tid != 2) ready_threads++;
+    // ready_threads++;
     int priority = t->priority;
-    list_push_back (multilevel_lists[priority-1], &t->elem);
+    list_push_back (multilevel_lists[priority], &t->elem);
   } else {
     list_push_back (&ready_list, &t->elem);
   }
@@ -480,7 +486,7 @@ thread_yield (void)
   if (cur != idle_thread) {
     if (thread_mlfqs) {
       int priority = cur->priority;
-      list_push_back (multilevel_lists[priority-1], &cur->elem);
+      list_push_back (multilevel_lists[priority], &cur->elem);
     } else {
       list_push_back (&ready_list, &cur->elem);
     }
@@ -527,7 +533,6 @@ thread_set_priority (int new_priority)
 
   cur->priority = new_priority;
   cur->actual_priority = new_priority;
-  // printf("Current thread name, id and priority: %s, %d, %d\n", cur->name, cur->tid, cur->priority);
   /* if priority is increased, then don't check if scheduling is needed */
   if (new_priority >= old_priority) {
     return;
@@ -537,15 +542,15 @@ thread_set_priority (int new_priority)
   struct list_elem *e;
   bool yield = false;
   struct thread *t;
+
   for (e = list_begin (&ready_list); e != list_end (&ready_list); e = list_next (e)) {
     t = list_entry (e, struct thread, elem);
-    // printf("Thread name, id and priority: %s, %d, %d\n", t->name, t->tid, t->priority);
-    if (t->priority > new_priority) {
-      // printf("Thread %s is current but it will yield to %s\n", cur->name, t->name);
+    if (t->sleeping && t->wakeup_at < timer_ticks ()) thread_wakeup (t);
+    if (t->priority > new_priority && t->status == THREAD_READY && t->sleeping == false) {
         yield = true;
         break;
     }
-  }
+  } 
   intr_set_level (old_level);
   // yield the thread, method disables the interrupt - should this be inside the above block?
   if (yield == true) {
@@ -567,16 +572,24 @@ thread_update_all_priorities (void)
   struct thread *t;
   for (it = list_begin (&all_list); it != list_end (&all_list); it = list_next (it)) {
     t = list_entry (it, struct thread, allelem);
+    if (t == idle_thread) continue;
     t->priority = calculate_priority (t->recent_cpu, t->nice);
   }
 }
 
 /* Sets the current thread's nice value to NICE. */
 void
-thread_set_nice (int nice UNUSED) 
+thread_set_nice (int new_nice) 
 {
+  enum intr_level old_level = intr_disable ();
   struct thread *cur = thread_current ();
-  cur->nice = nice;
+  cur->nice = new_nice;
+  int old_priority = cur->priority;
+  cur->priority = calculate_priority (cur->recent_cpu, cur->nice);
+  intr_set_level (old_level);
+  if (cur->priority < old_priority) {
+    thread_yield ();
+  }
 }
 
 /* Returns the current thread's nice value. */
@@ -628,6 +641,12 @@ void
 thread_set_recent_cpu (struct thread *t)
 {
   t->recent_cpu = calculate_recent_cpu (load_average, t->recent_cpu, t->nice);
+}
+
+int
+all_ready_threads (void)
+{
+  return ready_threads;
 }
 
 /* Idle thread.  Executes when no other thread is ready to run.
@@ -752,7 +771,13 @@ alloc_frame (struct thread *t, size_t size)
   return t->stack;
 }
 
-static struct thread *
+/* This method is same as the find_next_thread, but starts to check for available
+ * threads in the multilevel list with highest priority. For mlfqs, two methods
+ * are not required because this one finds the next available thread of highest priority
+ * by default (round robin with highest priority)
+ * NOTE: if 
+*/
+struct thread *
 find_next_thread_mlfqs (struct thread *cur)
 {
   enum intr_level old_level = intr_disable ();
@@ -763,11 +788,13 @@ find_next_thread_mlfqs (struct thread *cur)
   struct list_elem *t_max;
   struct list *tlist;
 
-  for (int i = PRI_MAX-1; i >= 0; i++) {
+  for (int i = PRI_MAX; i >= 0; i--) {
     tlist = multilevel_lists[i];
     if (list_size (tlist) > 0) {
       for (it = list_begin (tlist); it != list_end (tlist); it = list_next (it)) {
         next = list_entry (it, struct thread, elem);
+        if (next->sleeping && next->wakeup_at < timer_ticks ()) thread_wakeup (next);
+
         if (next->sleeping || next->status != THREAD_READY) {
           continue;
         }
@@ -777,6 +804,7 @@ find_next_thread_mlfqs (struct thread *cur)
       }
       if (found == true) {
         next = list_entry (t_max, struct thread, elem);
+        ASSERT (is_thread (next));
         list_remove (t_max);
         intr_set_level (old_level);
         return next;
@@ -784,72 +812,93 @@ find_next_thread_mlfqs (struct thread *cur)
     }
   }
   ASSERT (is_thread (idle_thread));
+  intr_set_level (old_level);
   return idle_thread;
 }
 
-static struct thread *
-find_highest_priority_thread (void)
-{
-  enum intr_level old_level = intr_disable ();
-  int max_priority = -1;
-  struct thread *next;
-  struct list_elem *it;
-  struct list_elem *t_max;
-  for (it = list_begin (&ready_list); it != list_end (&ready_list); it = list_next (it)) {
-    next = list_entry (it, struct thread, elem);
-    if (next->sleeping && next->wakeup_at < timer_ticks ()) thread_wakeup (next);
+/* When idle thread is running, it can be because there are no threads to run
+ * or all other threads are sleeping/blocked. Former case doesn't lead to execution
+ * of this method - in the latter case, it's possible that multiple threads woke up
+ * in this scheduling event - however, the highest priority thread must be run, not
+ * the first available thread (unlike the other method).
+ * NOTE: if no thread wakes up/unblocks, then idle_thread is scheduled again
+*/
 
-    if (next->sleeping || next->status != THREAD_READY) {
-      continue;
-    }
-    if (next->priority >= max_priority) {
-      t_max = it;
-      max_priority = next->priority;
-    }
-  }
-  if (max_priority == -1) {
-    return idle_thread;
-  }
-  next = list_entry (t_max, struct thread, elem);
-  // Remove
-  ASSERT (is_thread (next));
-  list_remove (t_max);
-  intr_set_level (old_level);
-  return next;
-}
-
-static struct thread *
+struct thread *
 find_next_thread (struct thread *cur)
 {
   enum intr_level old_level = intr_disable ();
-  int cur_priority = cur->priority;
-  bool found = false;
-  struct list_elem *it;
-  struct list_elem *t;
+  int max_priority = -1;
+  if (!cur->sleeping) max_priority = cur->priority;
+
   struct thread *next;
+  struct list_elem *it;
+  struct list_elem *t_pre;
+  struct list_elem *t_max;
+  bool found_cur = false;
+  bool found_pre = false;
+  bool found_max = false;
+
   for (it = list_begin (&ready_list); it != list_end (&ready_list); it = list_next (it)) {
     next = list_entry (it, struct thread, elem);
-    if (next->sleeping && next->wakeup_at < timer_ticks ()) thread_wakeup (next);
-
-    if (next->sleeping || next->status != THREAD_READY || next->priority < cur_priority) {
+    if (next == cur) {
+      found_cur = true;
       continue;
     }
-    found = true;
-    t = it;
-    break;
+    if (next->sleeping && next->wakeup_at < timer_ticks ()) thread_wakeup (next);
+    if (next->sleeping || next->status != THREAD_READY) {
+      continue;
+    }
+
+    // Find any eligible threads before the current thread with same priority
+    // for round robin, if no higher priority thread is found later
+    if (!found_cur && !found_pre && next->priority == cur->priority) {
+      t_pre = it;
+      found_pre = true;
+    }
+
+    // This takes the highest priority -> an eligible thread at any place in the
+    // ready queue with a priority larger than cur
+    if (next->priority > max_priority) {
+      t_max = it;
+      max_priority = next->priority;
+      found_max = true;
+    }
   }
-  if (found == false) {
-    // Remove
-    ASSERT(is_thread (idle_thread));
-    return idle_thread;
+
+  /* Iterates from left to right of the ready thread, comparing priority
+   * and thread status. Corner cases -
+   *   1. Current thread was blocked/dying - it won't be found in ready_queue
+   *   2. No thread w
+   * 
+  */ 
+  if (max_priority == -1) {
+    // cur is sleeping and no thread was found in the search -> schedule idle_thread
+    next = idle_thread;
+  } else if (max_priority > cur->priority) {
+    // a thread with priority > cur was found
+    next = list_entry (t_max, struct thread, elem);
+    list_remove (t_max);
+  } else if (found_pre) {
+    // a thread with priority = cur was found before cur, perform round-robin
+    next = list_entry (t_pre, struct thread, elem);
+    list_remove (t_pre);
+  } else if (!cur->sleeping && found_cur) {
+    next = cur;
+    list_remove (&cur->elem);
+  } else if (found_max) {
+    next = list_entry (t_max, struct thread, elem);
+    list_remove (t_max);
+  } else {
+    // cur was blocked or dying
+    ASSERT (found_cur == false);
+    ASSERT (cur->status == THREAD_BLOCKED || cur->status == THREAD_DYING);
+    next = idle_thread;
   }
-  next = list_entry (t, struct thread, elem);
-  // Remove
-  ASSERT (is_thread (next));
-  list_remove (t);
   intr_set_level (old_level);
   return next;
 }
+
 
 /* Chooses and returns the next thread to be scheduled.  Should
    return a thread from the run queue, unless the run queue is
@@ -867,9 +916,6 @@ next_thread_to_run (struct thread *cur)
     return idle_thread;
   }
 
-  if (cur == idle_thread) {
-    return find_highest_priority_thread ();
-  }
   return find_next_thread (cur);
 }
 
@@ -959,7 +1005,6 @@ allocate_tid (void)
   tid = next_tid++;
   lock_release (&tid_lock);
 
-  printf("Providing tid: %d\n", tid);
   return tid;
 }
 
