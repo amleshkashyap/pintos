@@ -177,7 +177,6 @@ timer_interrupt (struct intr_frame *args UNUSED)
     if (ticks % TIMER_FREQ == 0) {
       thread_set_load_avg ();
       thread_update_all_recent_cpu ();
-      // print_all_priorities ();
     }
 
     if (ticks % 4 == 0) thread_update_all_priorities ();

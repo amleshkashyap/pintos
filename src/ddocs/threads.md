@@ -112,6 +112,3 @@
         current thread could've been rescheduled - this is inefficient, but in the next scheduling cycle, that's remedied so not too bad.
     - The implementation for sleeping doesn't remove a thread from the ready list for now, but it ideally should for decoupling various
       additional scheduling strategies that need to be implemented.
-
-  * At the time of this writing, priority-donate-one and priority-change tests were working, however, alarm-simultaneous (which was working
-    earlier) had regressed.
