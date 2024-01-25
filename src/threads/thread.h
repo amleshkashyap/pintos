@@ -110,7 +110,7 @@ struct thread
     int donations_held;
 
     /* for mlfqs */
-    uint8_t nice;
+    int nice;
     fxpoint recent_cpu;
   };
 
@@ -138,7 +138,6 @@ void print_all_priorities (void);
 /* sleep without busy waiting */
 void thread_make_sleep (int64_t);
 void thread_wakeup (struct thread *);
-struct thread * find_next_thread (struct thread *);
 
 /* utility */
 uint64_t total_ticks (void);

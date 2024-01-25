@@ -126,7 +126,7 @@ sema_up (struct semaphore *sema)
       }
     }
     t = list_entry (t_max, struct thread, elem);
-    // printf("lock is released, waking up thread %s, %d with priority: %d, sema: %d\n", t->name, t->tid, t->priority, sema->value);
+    // printf("lock is released, waking up thread %s, %d with priority: %d, sema: %d, main prio: %d\n", t->name, t->tid, t->priority, sema->value, get_thread_by_tid (1)->priority);
     list_remove (t_max);
     thread_unblock(t);
   }
