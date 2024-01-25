@@ -56,15 +56,15 @@ static inline fxpoint calculate_recent_cpu (fxpoint recent_cpu, fxpoint load_avg
   fxpoint c1 = mult_fxpoint_int (load_avg, 2);
   fxpoint c2 = add_fxpoint_int (c1, 1);
   fxpoint c3 = div_fxpoint (c1, c2);
-  load_avg = mult_fxpoint (c3, recent_cpu);
-  return add_fxpoint_int (load_avg, nice);
+  fxpoint c4 = mult_fxpoint (c3, recent_cpu);
+  return add_fxpoint_int (c4, nice);
 }
 
 static inline fxpoint calculate_load_avg (fxpoint load_avg, int ready_threads)
 {
   fxpoint c1 = mult_fxpoint (load_avg, load_avg_coeff);
   fxpoint c2 = mult_fxpoint_int (ready_threads_coeff, ready_threads);
-  return (c1 + c2);
+  return add_fxpoint (c1, c2);
 }
 
 #endif /* threads/fixed-point.h */

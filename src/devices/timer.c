@@ -93,7 +93,7 @@ timer_sleep (int64_t ticks)
   int64_t start = timer_ticks ();
 
   ASSERT (intr_get_level () == INTR_ON);
-  thread_make_sleep (start + ticks - 1);
+  thread_make_sleep (start + ticks);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -174,13 +174,13 @@ timer_interrupt (struct intr_frame *args UNUSED)
   if (thread_mlfqs) {
     thread_recent_cpu_tick ();
 
-    if (ticks%TIMER_FREQ == 0) {
+    if (ticks % TIMER_FREQ == 0) {
       thread_set_load_avg ();
       thread_update_all_recent_cpu ();
-      thread_update_all_priorities ();
-    } else if (ticks%4 == 0) {
-      thread_update_all_priorities ();
+      // print_all_priorities ();
     }
+
+    if (ticks % 4 == 0) thread_update_all_priorities ();
   }
   thread_tick ();
 }

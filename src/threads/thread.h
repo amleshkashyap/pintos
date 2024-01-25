@@ -129,9 +129,11 @@ typedef void thread_func (void *aux);
 tid_t thread_create (const char *name, int priority, thread_func *, void *);
 
 /* priority scheduling and donation */
-void priority_schedule (struct thread *);
+void priority_schedule (struct thread *, struct thread *);
 void donate_priority (struct thread *, struct thread *, struct lock *);
 void reset_donated_priority (struct thread *);
+
+void print_all_priorities (void);
 
 /* sleep without busy waiting */
 void thread_make_sleep (int64_t);
