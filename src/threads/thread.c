@@ -200,11 +200,14 @@ thread_create (const char *name, int priority,
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
   // printf("Thread with name, tid, priority %s, %d, %d\n", t->name, tid, t->priority);
+
+  /* only after tid is allocated, update the nice values
+   * assuming that initial and idle thread are tid 1 and 2 */
   struct thread *cur = thread_current ();
   if (thread_mlfqs && tid > 2) {
     t->nice = cur->nice;
     // thread is yielded at the bottom
-    t->priority = calculate_priority (0, t->nice);
+    t->priority = calculate_priority (t->recent_cpu, t->nice);
     t->actual_priority = t->priority;
   }
 
@@ -229,11 +232,7 @@ thread_create (const char *name, int priority,
   /* Don't yield current thread during init
    * Assumes idle thread always has tid = 2 */
   if (t->tid > 2) {
-    if (!thread_mlfqs) {
-      priority_schedule (cur, t);
-    } else {
-      priority_schedule (cur, t);
-    }
+    priority_schedule (cur, t);
   }
 
   return tid;
@@ -244,6 +243,7 @@ void
 reset_donated_priority (struct thread *cur)
 {
   ASSERT (!thread_mlfqs);
+  ASSERT (intr_get_level () == INTR_OFF);
   int donations_made = cur->donations_made;
   if (donations_made <= 0) {
     return;
@@ -275,6 +275,7 @@ reset_donated_priority (struct thread *cur)
 void
 donate_priority (struct thread *cur, struct thread *holder, struct lock *l)
 {
+  ASSERT (!thread_mlfqs);
   ASSERT (intr_get_level () == INTR_OFF);
 
   int cur_priority = cur->priority;
@@ -321,6 +322,9 @@ donate_priority (struct thread *cur, struct thread *holder, struct lock *l)
   }
 }
 
+/* This method is called during thread creation only - if the new thread has a higher
+ * priority, then current thread should yield
+*/
 void
 priority_schedule (struct thread *cur, struct thread *t)
 {
@@ -354,6 +358,11 @@ thread_wakeup (struct thread *t)
   ready_threads++;
 }
 
+/* Iterates through all_list to wakeup sleeping threads during scheduling
+ * An additional list should be utilised to maintain sleeping threads
+ *   - better performance
+ *   - cleaner code
+*/
 static void
 wakeup_threads (void)
 {
@@ -366,6 +375,7 @@ wakeup_threads (void)
   }
 }
 
+/* fetch a thread from all_list -> useful for priority donation. Is this safe? */
 struct thread *
 get_thread_by_tid (int tid)
 {
@@ -420,7 +430,14 @@ thread_unblock (struct thread *t)
   if (thread_mlfqs) {
     list_push_back (&multilevel_lists[t->priority], &t->elem);
   } else {
-    list_push_back (&ready_list, &t->elem);
+    if (t->donations_made > 0) {
+      // TODO: this appears to be a hacky way - need to compare the lock/sema as well
+      // If this is not done, then a donee thread will get scheduled despite having a lower actual priority
+      // however, the donee thread can't reset its priority after releasing the lock as it maybe holding other locks
+      list_push_front (&ready_list, &t->elem);
+    } else {
+      list_push_back (&ready_list, &t->elem);
+    }
   }
   t->status = THREAD_READY;
   intr_set_level (old_level);
@@ -591,6 +608,7 @@ thread_update_all_priorities (void)
 {
   enum intr_level old_level = intr_disable ();
   struct list_elem *it;
+  struct list_elem *t_it;
   struct list *tlist;
   struct thread *t;
   for (int i = PRI_MAX; i >= 0; i--) {
@@ -601,11 +619,11 @@ thread_update_all_priorities (void)
         int old_priority = t->priority;
         t->priority = calculate_priority (t->recent_cpu, t->nice);
         if (t->priority != old_priority) {
-          struct list_elem *t_it = list_prev (it);
+          t_it = list_prev (it);
           list_remove (&t->elem);
           list_push_back (&multilevel_lists[t->priority], &t->elem);
           it = t_it;
-	}
+        }
       }
     }
   }
@@ -618,6 +636,7 @@ thread_update_all_priorities (void)
   intr_set_level (old_level);
 }
 
+/* for debugging */
 void
 print_all_priorities (void)
 {
@@ -638,7 +657,13 @@ thread_set_nice (int new_nice)
 {
   enum intr_level old_level = intr_disable ();
   struct thread *cur = thread_current ();
-  cur->nice = new_nice;
+  if (new_nice > 20) {
+    cur->nice = 20;
+  } else if (new_nice < -20) {
+    cur->nice = -20;
+  } else {
+    cur->nice = new_nice;
+  }
   int old_priority = cur->priority;
   // current thread not in ready list
   cur->priority = calculate_priority (cur->recent_cpu, cur->nice);
@@ -659,8 +684,7 @@ thread_get_nice (void)
 int
 thread_get_load_avg (void) 
 {
-  fxpoint temp = mult_fxpoint_int (load_average, 100);  
-  return fxtoi_nearest (temp); // mult_fxpoint_int (load_average, 100));
+  return fxtoi_nearest (mult_fxpoint_int (load_average, 100));
 }
 
 void
@@ -677,7 +701,7 @@ thread_get_recent_cpu (void)
 }
 
 /* Setting of recent cpu doesn't lead to a change in priority
- * no shuffling required - hence, iterate over the alllist
+ * no shuffling required - hence, iterate over the all_list
 */ 
 void thread_update_all_recent_cpu (void)
 {
@@ -810,6 +834,7 @@ init_thread (struct thread *t, const char *name, int priority)
   } else {
     t->nice = 0;
     t->recent_cpu = 0;
+    // when nice and recent_cpu are 0, priority is PRI_MAX
     t->priority = PRI_MAX;
     t->actual_priority = PRI_MAX;
   }
@@ -833,9 +858,9 @@ alloc_frame (struct thread *t, size_t size)
 }
 
 /* This method is same as the find_next_thread, but starts to check for available
- * threads in the multilevel list with highest priority. For mlfqs, two methods
- * are not required because this one finds the next available thread of highest priority
- * by default (round robin with highest priority)
+ * threads in the multilevel list with highest priority. Finds the next available 
+ * thread of highest priority by default (round robin with highest priority)
+ * NOTE: in thread_update_all_priorities (), threads should be updated in same order
 */
 static struct thread *
 find_next_thread_mlfqs (struct thread *cur UNUSED)
@@ -853,6 +878,7 @@ find_next_thread_mlfqs (struct thread *cur UNUSED)
     if (list_size (tlist) > 0) {
       for (it = list_begin (tlist); it != list_end (tlist); it = list_next (it)) {
         next = list_entry (it, struct thread, elem);
+        // ensure no mismatches
         ASSERT (next->priority == i);
         if (next->sleeping || next->status != THREAD_READY) {
           continue;
@@ -875,15 +901,8 @@ find_next_thread_mlfqs (struct thread *cur UNUSED)
   return idle_thread;
 }
 
-/* When idle thread is running, it can be because there are no threads to run
- * or all other threads are sleeping/blocked. Former case doesn't lead to execution
- * of this method - in the latter case, it's possible that multiple threads woke up
- * in this scheduling event - however, the highest priority thread must be run, not
- * the first available thread (unlike the other method).
- * NOTE: if no thread wakes up/unblocks, then idle_thread is scheduled again
-*/
-
-struct thread *
+/* Iterates through the ready list to find a suitable thread */
+static struct thread *
 find_next_thread (struct thread *cur)
 {
   enum intr_level old_level = intr_disable ();
@@ -926,9 +945,8 @@ find_next_thread (struct thread *cur)
 
   /* Iterates from left to right of the ready thread, comparing priority
    * and thread status. Corner cases -
-   *   1. Current thread was blocked/dying - it won't be found in ready_queue
-   *   2. No thread w
-   * 
+   *   1. Current thread was blocked/dying
+   *   2. All threads are sleeping
   */ 
   if (max_priority == -1) {
     // cur is sleeping and no thread was found in the search -> schedule idle_thread
