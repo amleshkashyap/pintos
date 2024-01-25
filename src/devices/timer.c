@@ -67,6 +67,7 @@ timer_calibrate (void)
 }
 
 /* Returns the number of timer ticks since the OS booted. */
+/* Disables the interrupt to get the ticks, and then enables again (if was enabled earlier) - why is it required? */
 int64_t
 timer_ticks (void) 
 {
@@ -92,8 +93,7 @@ timer_sleep (int64_t ticks)
   int64_t start = timer_ticks ();
 
   ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+  thread_make_sleep (start + ticks);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -171,6 +171,16 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
+  if (thread_mlfqs) {
+    thread_recent_cpu_tick ();
+
+    if (ticks % TIMER_FREQ == 0) {
+      thread_set_load_avg ();
+      thread_update_all_recent_cpu ();
+    }
+
+    if (ticks % 4 == 0) thread_update_all_priorities ();
+  }
   thread_tick ();
 }
 

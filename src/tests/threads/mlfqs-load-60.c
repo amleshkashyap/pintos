@@ -118,6 +118,60 @@ test_mlfqs_load_60 (void)
   
   ASSERT (thread_mlfqs);
 
+  /* validate individual methods */
+  /* Uncomment to validate
+  fxpoint t1 = div_fxpoint (59, 60);
+  fxpoint t1_1 = mult_fxpoint_int (t1, 100);
+  int t1_2 = fxtoi_nearest (t1_1);
+  fxpoint t2 = div_fxpoint (1, 60);
+  fxpoint t3 = mult_fxpoint_int (mult_fxpoint (t1, t1), 100);
+  int t4 = fxtoi_nearest (t3);
+  fxpoint t5 = mult_fxpoint_int (add_fxpoint_int (t1, 1), 100);
+  int t6 = fxtoi_nearest (t5);
+  fxpoint t7 = mult_fxpoint_int (sub_fxpoint_int (t1, 1), 100);
+  int t8 = fxtoi_nearest (t7);
+  fxpoint t9 = mult_fxpoint_int (mult_fxpoint_int (t2, 60), 100);
+  int t10 = fxtoi_nearest (t9);
+  fxpoint t11 = calculate_load_avg (div_fxpoint (307, 100), 61);
+  fxpoint t12 = mult_fxpoint_int (t11, 100);
+  int t13 = fxtoi_nearest (t12);
+  fxpoint t14 = mult_fxpoint_int (calculate_load_avg (t11, 61), 100);
+  int t15 = fxtoi_nearest (t14);
+
+  ASSERT (t1 == 16110);
+  ASSERT (t1_2 == 98);
+  ASSERT (load_avg_coeff == t1);
+  // ASSERT (t3 == 1584200);
+  ASSERT (t4 == 97);
+  ASSERT (t5 == 3249400);  // (16110 + 16384)*100
+  ASSERT (t6 == 198);
+  ASSERT (t7 == -27400);   // (16110 - 16384)*100
+  ASSERT (t8 == -2);
+
+  msg ("59/60: %lld, int: %d, float: %d.%02d\n\
+	1/60: %lld\n\
+	1/4: %lld\n\
+        1: %lld\n\
+        load_coeff: %lld\n\
+        (59/60)*(59/60)*100: %lld, int: %d, float: %d.%02d\n\
+        ((59/60)+1)*100: %lld, int: %d, float: %d.%02d\n\
+        ((59/60)-1)*100: %lld, int: %d, float: %d.%02d\n\
+        ((1/60)*60)*100: %lld, int: %d, float: %d.%02d\n\
+        load avg with load: 3.2, ready: 61 - %lld, int: %d, float: %d.%02d\n\
+        load avg after above - %lld, int: %d, float: %d.%02d",
+       t1, t1_2, t1_2 / 100, t1_2 % 100,
+       t2,
+       div_fxpoint (1, 4),
+       get_fxpoint (1),
+       load_avg_coeff,
+       t3, t4, t4 / 100, t4 % 100,
+       t5, t6, t6 / 100, t6 % 100,
+       t7, t8, t8 / 100, t8 %100,
+       t9, t10, t10 / 100, t10 % 100,
+       t12, t13, t13 / 100, t13 % 100,
+       t14, t15, t15 / 100, t15 % 100);
+  */
+
   start_time = timer_ticks ();
   msg ("Starting %d niced load threads...", THREAD_CNT);
   for (i = 0; i < THREAD_CNT; i++) 

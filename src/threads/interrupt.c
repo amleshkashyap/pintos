@@ -26,6 +26,7 @@
    Table (IDT)", 5.11 "IDT Descriptors", 5.12.1.2 "Flag Usage By
    Exception- or Interrupt-Handler Procedure". */
 static uint64_t idt[INTR_CNT];
+static uint64_t i_ticks;
 
 /* Interrupt handler functions for each interrupt. */
 static intr_handler_func *intr_handlers[INTR_CNT];
@@ -119,6 +120,7 @@ intr_init (void)
 {
   uint64_t idtr_operand;
   int i;
+  i_ticks = 0;
 
   /* Initialize interrupt controller. */
   pic_init ();
@@ -346,6 +348,12 @@ intr_handler (struct intr_frame *frame)
 {
   bool external;
   intr_handler_func *handler;
+  /*
+  if (i_ticks%1000 == 0) {
+    printf("Interrupt at %lld\n", i_ticks);
+  }
+  */
+  i_ticks++;
 
   /* External interrupts are special.
      We only handle one at a time (so interrupts must be off)
@@ -383,8 +391,10 @@ intr_handler (struct intr_frame *frame)
       in_external_intr = false;
       pic_end_of_interrupt (frame->vec_no); 
 
-      if (yield_on_return) 
-        thread_yield (); 
+      if (yield_on_return) {
+        // printf("Yielding thread\n");
+        thread_yield ();
+      }
     }
 }
 

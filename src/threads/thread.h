@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "threads/fixed-point.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -18,11 +19,6 @@ enum thread_status
    You can redefine this to whatever type you like. */
 typedef int tid_t;
 #define TID_ERROR ((tid_t) -1)          /* Error value for tid_t. */
-
-/* Thread priorities. */
-#define PRI_MIN 0                       /* Lowest priority. */
-#define PRI_DEFAULT 31                  /* Default priority. */
-#define PRI_MAX 63                      /* Highest priority. */
 
 /* A kernel thread or user process.
 
@@ -100,6 +96,22 @@ struct thread
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
+
+    /* for tracking sleeping threads */
+    int64_t wakeup_at;
+    bool sleeping;
+
+    /* for priority donation */
+    int actual_priority;
+    int donated_priority[8];
+    tid_t donated_to[8];
+    struct lock *donated_for;
+    int donations_made;
+    int donations_held;
+
+    /* for mlfqs */
+    int nice;
+    fxpoint recent_cpu;
   };
 
 /* If false (default), use round-robin scheduler.
@@ -115,6 +127,21 @@ void thread_print_stats (void);
 
 typedef void thread_func (void *aux);
 tid_t thread_create (const char *name, int priority, thread_func *, void *);
+
+/* priority scheduling and donation */
+void priority_schedule (struct thread *, struct thread *);
+void donate_priority (struct thread *, struct thread *, struct lock *);
+void reset_donated_priority (struct thread *);
+
+void print_all_priorities (void);
+
+/* sleep without busy waiting */
+void thread_make_sleep (int64_t);
+void thread_wakeup (struct thread *);
+
+/* utility */
+uint64_t total_ticks (void);
+struct thread * get_thread_by_tid (int);
 
 void thread_block (void);
 void thread_unblock (struct thread *);
@@ -137,5 +164,13 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+void thread_set_load_avg (void);
+void thread_set_recent_cpu (struct thread *t);
+void thread_update_all_priorities (void);
+void thread_recent_cpu_tick (void);
+void thread_update_all_recent_cpu (void);
+
+int all_ready_threads (void);
 
 #endif /* threads/thread.h */
