@@ -119,10 +119,7 @@ test_mlfqs_load_60 (void)
   ASSERT (thread_mlfqs);
 
   /* validate individual methods */
-  /* fxpoint - div, mult
-   * int - mult, add, sub
-   * conversion - fxtoi_nearest
-  */
+  /* Uncomment to validate
   fxpoint t1 = div_fxpoint (59, 60);
   fxpoint t1_1 = mult_fxpoint_int (t1, 100);
   int t1_2 = fxtoi_nearest (t1_1);
@@ -133,6 +130,13 @@ test_mlfqs_load_60 (void)
   int t6 = fxtoi_nearest (t5);
   fxpoint t7 = mult_fxpoint_int (sub_fxpoint_int (t1, 1), 100);
   int t8 = fxtoi_nearest (t7);
+  fxpoint t9 = mult_fxpoint_int (mult_fxpoint_int (t2, 60), 100);
+  int t10 = fxtoi_nearest (t9);
+  fxpoint t11 = calculate_load_avg (div_fxpoint (307, 100), 61);
+  fxpoint t12 = mult_fxpoint_int (t11, 100);
+  int t13 = fxtoi_nearest (t12);
+  fxpoint t14 = mult_fxpoint_int (calculate_load_avg (t11, 61), 100);
+  int t15 = fxtoi_nearest (t14);
 
   ASSERT (t1 == 16110);
   ASSERT (t1_2 == 98);
@@ -151,7 +155,10 @@ test_mlfqs_load_60 (void)
         load_coeff: %lld\n\
         (59/60)*(59/60)*100: %lld, int: %d, float: %d.%02d\n\
         ((59/60)+1)*100: %lld, int: %d, float: %d.%02d\n\
-        ((59/60)-1)*100: %lld, int: %d, float: %d.%02d",
+        ((59/60)-1)*100: %lld, int: %d, float: %d.%02d\n\
+        ((1/60)*60)*100: %lld, int: %d, float: %d.%02d\n\
+        load avg with load: 3.2, ready: 61 - %lld, int: %d, float: %d.%02d\n\
+        load avg after above - %lld, int: %d, float: %d.%02d",
        t1, t1_2, t1_2 / 100, t1_2 % 100,
        t2,
        div_fxpoint (1, 4),
@@ -159,8 +166,11 @@ test_mlfqs_load_60 (void)
        load_avg_coeff,
        t3, t4, t4 / 100, t4 % 100,
        t5, t6, t6 / 100, t6 % 100,
-       t7, t8, t8 / 100, t8 %100);
-  //
+       t7, t8, t8 / 100, t8 %100,
+       t9, t10, t10 / 100, t10 % 100,
+       t12, t13, t13 / 100, t13 % 100,
+       t14, t15, t15 / 100, t15 % 100);
+  */
 
   start_time = timer_ticks ();
   msg ("Starting %d niced load threads...", THREAD_CNT);
@@ -179,8 +189,8 @@ test_mlfqs_load_60 (void)
       int load_avg;
       timer_sleep (sleep_until - timer_ticks ());
       load_avg = thread_get_load_avg ();
-      msg ("After %d seconds, load average=%d.%02d. ready: %d",
-           i * 2, load_avg / 100, load_avg % 100, all_ready_threads ());
+      msg ("After %d seconds, load average=%d.%02d.",
+           i * 2, load_avg / 100, load_avg % 100);
     }
 }
 
