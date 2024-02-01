@@ -332,6 +332,7 @@ priority_schedule (struct thread *cur, struct thread *t)
   old_level = intr_disable ();
   // printf("cur tid, prio: %d, %d, t tid, prio: %d, %d\n", cur->tid, cur->priority, t->tid, t->priority);
   if (cur->priority < t->priority) {
+    ASSERT (!intr_context ());
     thread_yield ();
   }
   intr_set_level (old_level);
@@ -346,6 +347,7 @@ thread_make_sleep (int64_t new_wakeup_at)
   cur->sleeping = true;
   ready_threads--;
   intr_set_level (old_level);
+  ASSERT (!intr_context ());
   thread_yield ();
 }
 
@@ -588,6 +590,7 @@ thread_set_priority (int new_priority)
   intr_set_level (old_level);
   // yield the thread, method disables the interrupt - should this be inside the above block?
   if (yield == true) {
+    ASSERT (!intr_context ());
     thread_yield ();
   }
 }
@@ -669,6 +672,7 @@ thread_set_nice (int new_nice)
   cur->priority = calculate_priority (cur->recent_cpu, cur->nice);
   intr_set_level (old_level);
   if (cur->priority < old_priority) {
+    ASSERT (!intr_context ());
     thread_yield ();
   }
 }

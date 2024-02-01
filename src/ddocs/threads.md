@@ -1,21 +1,62 @@
-## 32-bit Registers (switch.S)
-  * ebx - base register (bx), used for indexed addressing
-  * ebp - base pointer (bp), reference pointer to the parameters passed in subroutine
-    - ss + bp -> location of parameter
-    - di/si + bp -> special addressing
-  * esi - source index (si), for string operations
-  * edi - destination index (di), for string operations
-  * eax - accumulator (ax), stores operands in arithmetic instructions
-  * ecx - counter (cx), stores loop count in iterative operations
-  * edx - data register (dx), stores operands for mult/div operations with large values
-  * esp - stack pointer (sp), provides offset for program stack
-    - ss + sp -> location of data/address in program stack
-  * eip - instruction pointer (ip), offset of next instruction to be executed
-    - cs + ip -> complete address of current instruction in code segment
+## I32-bit Register Related Structures
+  * struct intr\_frame (all members are int32 corresponding to 32-bit registers unless specified)
+    - edi - destination index (di), for string operations
+    - esi - source index (si), for string operations
+    - ebp - base pointer (bp), reference pointer to the parameters passed in subroutine
+      - ss + bp -> location of parameter
+      - di/si + bp -> special addressing
+    - esp\_dummy - Not used
+    - ebx - base register (bx), used for indexed addressing
+    - edx - data register (dx), stores operands for mult/div operations with large values
+    - ecx - counter (cx), stores loop count in iterative operations
+    - eax - accumulator (ax), stores operands in arithmetic instructions
+    - (int16) gs
+    - (int16) fs
+    - (int16) es
+    - (int16) ds - stores the starting address of data segment (data, constants, work areas)
+    - vec\_no - interrupt vector number
+    - error\_code - 
+    - (void \*) frame\_pointer
+    - (void \*) eip (void) - instruction pointer (ip), offset of next instruction to be executed
+      - cs + ip -> complete address of current instruction in code segment
+    - (int16) cs - stores the starting address of code segment (instructions to be executed)
+    - eflags
+    - (void \*) esp - stack pointer (sp), provides offset for program stack
+      - ss + sp -> location of data/address in program stack
+    - (int16) ss - stores the starting address of stack segment (data and return address for procedures)
 
-  * cs - stores the starting address of code segment (instructions to be executed)
-  * ds - stores the starting address of data segment (data, constants, work areas)
-  * ss - stores the starting address of stack segment (data and return address for procedures)
+  * struct switch\_threads\_frame
+    - edi
+    - esi
+    - ebp
+    - ebx
+    - (void \*) eip (void)
+    - struct thread \*cur
+    - struct thread \*next
+
+  * struct switch\_entry\_frame
+    - (void \*) eip (void)
+
+  * struct kernel\_thread\_frame
+    - (void \*) eip - Return address (for?)
+    - (thread\_func \*) function - Function to be executed
+    - (void \*) aux - Auxiliary data for the function
+
+  * struct tss (all members are int16, unless specified)
+    - back\_link
+    - (void \*) esp0
+    - ss0
+    - (void \*) esp1
+    - ss1
+    - (void \*) esp2
+    - ss2
+    - (int32) cr3
+    - (void \*) eip (void)
+    - (int32) - eflags, eax, ecx, edx, ebx, esp, ebp, esi, edi
+    - es, cs, ss, ds, fs, gs
+    - ldt
+    - trace
+    - bitmap
 
   * Control Registers - overflow (OF, 11), direction (DF, 10), interrupt (IF, 9), trap (TF, 8), sign (SF, 7), zero (ZF, 6),
     auxiliary carry(AF, 4), parity (PF, 2), carry (CF, 0)
@@ -112,3 +153,33 @@
         current thread could've been rescheduled - this is inefficient, but in the next scheduling cycle, that's remedied so not too bad.
     - The implementation for sleeping doesn't remove a thread from the ready list for now, but it ideally should for decoupling various
       additional scheduling strategies that need to be implemented.
+
+## Workflows
+  * Initialization
+    - Create first thread - store as initial\_thread immediately, add to ready queue
+    - Create second thread - add to ready queue -> when executed first, store as idle\_thread -> never add to ready queue again
+    - Further operations in run\_actions
+
+  * Scheduling
+    - Timer Interrupt -> intr\_handler () -> timer\_interrupt () -> possibly schedule another thread (if TIME\_SLICE thread\_ticks ())
+    - Sleep -> schedule another thread
+    - Blocked by semaphore/lock -> schedule another thread
+    - Unblocked by semaphore/lock -> add to ready queue
+    - Increase/decrease priority -> possibly schedule another thread
+    - Create new thread -> possibly schedule another thread based on priority
+    - Update nice value -> increase/decrease priority -> possibly schedule another thread
+    - When a thread has completed -> schedule another thread
+    - At the time of scheduling -> wakeup all sleeping threads.
+    - Counting threads -
+      - increase when new thread is added to ready list, or woken up from sleep
+      - reduce when a thread is blocked, made to sleep or when completed
+      - never count second thread
+
+  * Priority Donation
+    - While Acquiring Lock -> check the priority of holder -> if lower, increase its priority -> if it has donated to threads, increase the
+      priority of all the threads.
+    - After Acquiring Lock -> check if donated priority to threads -> if yes, change their priorities
+    - After Releasing Lock -> check if it has received any donations -> if yes, then yield the CPU immediately
+    - After Releasing Lock -> check if there are waiting threads -> if yes, unblock the highest priority thread -> if that thread has made
+      donations, then put it at the front of the ready list.
+    - There's no actual recursive method for nested priority donation.
