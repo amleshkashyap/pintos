@@ -39,9 +39,9 @@ process_execute (const char *file_name)
   strlcpy (fn_copy, file_name, PGSIZE);
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (file_name, PRI_DEFAULT+1, start_process, fn_copy);
   if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+    palloc_free_page (fn_copy);
   return tid;
 }
 
@@ -88,7 +88,10 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  return -1;
+  for (; ;) {
+    continue;
+  }
+  // return -1;
 }
 
 /* Free the current process's resources. */
@@ -196,6 +199,8 @@ struct Elf32_Phdr
 #define PF_R 4          /* Readable. */
 
 static bool setup_stack (void **esp);
+static bool push_arguments_to_stack (void **esp, char *program_name, int argc, char *args[]);
+
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
@@ -215,6 +220,17 @@ load (const char *file_name, void (**eip) (void), void **esp)
   bool success = false;
   int i;
 
+  char *t_args, *token;
+  strtok_r (file_name, " ", &t_args);
+  char *program_name = file_name;
+  int counter = 0;
+  char *args[20];
+  for (token = strtok_r (t_args, " ", &t_args); token != NULL; token = strtok_r (NULL, " ", &t_args)) {
+     args[counter] = token;
+     counter++;
+     // Throw error
+     if (counter == 20) break;
+  }
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
   if (t->pagedir == NULL) 
@@ -302,8 +318,9 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp))
-    goto done;
+  if (!setup_stack (esp)) goto done;
+
+  push_arguments_to_stack (esp, program_name, counter, args);
 
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
@@ -313,6 +330,9 @@ load (const char *file_name, void (**eip) (void), void **esp)
  done:
   /* We arrive here whether the load is successful or not. */
   file_close (file);
+  if (program_name != "halt") {
+    printf ("%s: exit(%d)\n", program_name, success);
+  }
   return success;
 }
 
@@ -424,6 +444,83 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   return true;
 }
 
+static bool
+push_arguments_to_stack (void **esp, char *program_name, int argc, char *args[])
+{
+  size_t intsize = sizeof (int);
+  size_t charsize = sizeof (char);
+
+  /*  
+  if (argc == 1) {
+    printf("stack is at: %x, holds the value: %x\nargc: %d, args: %s\n", esp, *esp, argc, *args);
+  } else if (argc > 1) {
+    printf("stack is at: %x, holds the value: %x\nargc: %d, args: %s, %s\n", esp, *esp, argc, *args, *(args + 1));
+  } */
+
+  void *t_esp = *esp;
+  char *addresses[20];
+  int counter;
+  for (int i = 0; i < argc; i++) {
+    t_esp = t_esp - 1;
+    memset (t_esp, (char) 0, 1);
+    size_t sz = strlen (args[i]);
+    t_esp -= sz;
+    memcpy (t_esp, args[i], sz * charsize);
+    addresses[i] = t_esp;
+    counter += (sz + 1);
+  }
+
+  t_esp -= 1;
+  memset (t_esp, (char) 0, 1);
+  size_t sz = strlen (program_name);
+  t_esp = (char *) t_esp - sz;
+  memcpy (t_esp, program_name, sz * charsize);
+  addresses[argc] = t_esp;
+  counter += (sz + 1);
+  uint8_t pad = (size_t) t_esp % 4;
+  if (pad != 0) {
+    t_esp -= pad;
+    uint8_t zero = 0;
+    printf("word pad: %d, t_esp at: %x\n", pad, t_esp);
+    for (int i = 0; i < pad; i++) {
+      memcpy (t_esp + i, &zero, 1);
+    }
+    counter += pad;
+    /*
+    void *zz = malloc (sizeof (int));
+    int k = 400;
+    memcpy (zz, &zero, sizeof (int));
+    printf("int: %d\n", *(int *) zz);
+    */
+  }
+  t_esp -= sizeof (char *);
+  memset (t_esp, 0, sizeof (char *));
+  counter += sizeof (char *);
+  for (int i = 0; i < argc; i++) {
+    t_esp -= sizeof (char *);
+    memcpy (t_esp, &addresses[i], sizeof (char *));
+    counter += (sizeof (char *));
+  }
+  t_esp -= sizeof (char *);
+  memcpy (t_esp, &addresses[argc], sizeof (char *));
+  counter += sizeof (char *);
+  char *argv_add = t_esp;
+  t_esp -= sizeof (char **);
+  memcpy (t_esp, &argv_add, sizeof (char **));
+  counter += sizeof (char **);
+  t_esp -= intsize;
+  counter += intsize;
+  argc++;
+  memcpy (t_esp, &argc, intsize);
+  t_esp -= sizeof (void *);
+  memcpy (t_esp, &argv_add, sizeof (void *));
+  counter += sizeof (void *);
+  *esp = t_esp;
+  hex_dump (*esp, *esp, counter, true);
+  printf("*esp set at: %x, esp: %x, &esp: %x, bytes: %d\n", *esp, esp, &esp, counter);
+  return true;
+}
+
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool
@@ -436,12 +533,14 @@ setup_stack (void **esp)
   if (kpage != NULL) 
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (success)
+      if (success) {
         *esp = PHYS_BASE;
-      else
+      } else {
         palloc_free_page (kpage);
+        return false;
+      }
     }
-  return success;
+  return true;
 }
 
 /* Adds a mapping from user virtual address UPAGE to kernel

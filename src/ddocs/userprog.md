@@ -1,3 +1,128 @@
+## Data Structures
+  * Stack Pointers
+    - In threads
+    - In interrupt frames
+    - In TSS
+
+  * Virtual Memory - Kernel vs User
+    - The interrupt frame for user process is contructed in the kernel
+    - In the interrupt frame, the stack pointer must point to an address according to the virtual memory for the user
+    - Arguments have to be stored according to that as well - however, it's not clear where exactly should the arguments be stored.
+
+  * Elf32\_Addr - 
+  * Elf32\_Word
+  * Elf32\_Off
+  * Elf32\_Half
+
+  * Executable Header (Elf32\_Ehdr)
+  * Program Header (Elf32\_Phdr)
+
+  * Interrupt
+
+## Functions
+  * process\_execute
+    - Takes a filename as the argument, makes a copy of the file in a new page.
+    - Creates a new thread with start\_process and the above copy of file as argument - fFrees the new page if there was an error
+
+  * start\_process
+    - Takes the filename as an argument
+    - Allocates and initializes new intr\_frame structure
+    - Sets all the segment registers and calls the load () method with the eip and esp of the new interrupt frame.
+    - If load fails, frees the page and exits.
+    - Starts the user process by calling assembly commands that simulate return from an interrupt - since syscalls will work as interrupts?
+
+  * load (char \*file\_name, void (\*\*eip) (void), void \*\*esp)
+    - Allocates and activates page directory.
+    - Opens the given file and verifies that its an ELF object (by loading and comparing the fields in ELF header, if present)
+    - Iterates through the Program Header table, looking for all the loadable segments.
+      - If it doesn't find any, exits with error.
+      - If it finds an entry of type PT\_SHLIB, exits with error
+    - It validates all the loadable segments by comparing some of the attributes - if validation fails for any of them, exits with error.
+    - After validating a segment, it loads the segment (ie, add it to process' address space) - exits with error if it fails.
+    - Sets up the stack by mapping a zeroed page at the top of user virtual memory.
+    - Stores the entry point of the executable in eip and stack pointer in esp.
+    - Related functions - validate\_segment (), load\_segment (), setup\_stack (), install\_page ()
+
+  * load\_segment (struct file \*file, off\_t ofs, uint8\_t \*upage, uint32\_t read\_bytes, uint32\_t zero\_bytes, bool writable)
+    - Loads a segment starting at offset ofs in file, at address upage.
+    - read\_bytes in upage are read from file starting at offset ofs
+    - zero\_bytes at upage + read\_bytes must be zeroed.
+    - Initialized pages are writable by user process if the param is true, else read-only.
+    - Returns false if memory allocation or disk read error occurs.
+
+  * setup\_stack (void \*\*esp)
+    - Gets a zeroed out page from allocator.
+    - Adds a mapping from user virtual address (say upage) to kernel virtual address (say kpage) in the page table. upage must not be
+      already mapped and kpage is to be obtained from user pool. Page should ideally be writable by user.
+
+## Workflows
+  * Initialization
+    - In Make.vars, USERPROG is defined
+    - This initializes task state segment and global descriptor tables
+    - Also initializes the exception and syscall modules
+    - Instead of executing the run\_test () (defined in tests/threads/tests.c), task execution is done via
+      process\_wait (process\_execute (task)) (defined in userprog/process.c). process\_wait does nothing initially.
+
+  * Process Execution
+    - Gets a page from kernel space (flag = 0), copies the given filename, creates a thread and returns at completion.
+      - If an error is signalled from the created thread, frees the allocated page.
+      - Copying of filename is only done for 1 page size -> hence the restriction of 4KB for arguments.
+    - Created thread executes start\_process method, which internally calls the load () method
+      - load () method does all the actual work of execution
+
+## Program Startup
+  * 80x86 Calling Convention
+    - Caller pushes each function argument on the stack one by one, using PUSH. Arguments are pushed in right to left order.
+      - Stack grows downwards - each push decrements the stack pointer and stores the location it now points to.
+    - Caller pushes the address of the next instruction (return address) on the stack and jumps to the first instruction of callee.
+      - CALL instruction does the above two actions.
+      - Callee executes - stack pointer is pointing to the return address, first argument is above it, second above the former, and so on.
+      - Callee stores the return value, if any, into EAX.
+      - Callee returns by popping return address from stack and jumping to the location it specifies, using RET instruction.
+    - Caller pops the arguments off the stack.
+
+  * Syntax
+    ```
+      void _start(int argc, char *argv[]) {
+        // main is a function call made by the entry method _start which never returns
+        // calls follow the above 80x86 convention.
+        exit (main (argc, argv));
+      }
+    ```
+  * Kernel must put the arguments for the initial function on the stack before starting the user program
+    - Place the words containing an argument each, at the top of the stack in any order (as addresses are used, as in the Example).
+    - Push the address of each string plus a null pointer sentinel on the stack, right to left - these are elements of argv.
+    - argv[argc] must be a null pointer, mandated by C standard. argv holds the address of argv[0].
+    - argv[0] is at the lowest virtual address. Push argv and argc in the order, followed by a fake return address (even though entry
+      function will never return).
+
+  * Example
+    ```
+      Address        Name               Data           Type
+      0xbffffffc     argv[3][...]       "bar\0"        char[4]
+      0xbffffff8     argv[2][...]       "foo\0"        char[4]
+      0xbffffff5     argv[1][...]       "-l\0"         char[3]
+      0xbfffffed     argv[0][...]       "/bin/ls\0"    char[8]
+      0xbfffffec     word-align         0              uint8_t
+      0xbfffffe8     argv[4]            0              char *
+      0xbfffffe4     argv[3]            0xbffffffc     char *
+      0xbfffffe0     argv[2]            0xbffffff8     char *
+      0xbfffffdc     argv[1]            0xbffffff5     char *
+      0xbfffffd8     argv[0]            0xbfffffed     char *
+      0xbfffffd4     argv               0xbfffffd8     char **
+      0xbfffffd0     argc               4              int
+      0xbfffffcc     return address     0              (void *) ()
+    ```
+
+  * System Call Workflows
+    - OS already deals with external interrupts and internal exceptions.
+    - User programs can request services (system calls) from OS via exceptions.
+    - int is commonly used for invoking a system call (in 80x86) - instruction is handled the same way as any other software exceptions.
+      - Arguments can also be pushed to the system calls by appending to the stack.
+    - The interrupt frame is passed to the syscall handler, which can access the stack via "esp" member of the structure - from the stack,
+      the syscall number and its arguments can be fetched (NOTE: syscall number is at the stack pointer, followed by arguments).
+    - Syscalls that return a value can do so by modifying the "eax" member of the given interrupt frame structure.
+
 ## Virtual Memory Layout
   * User + Kernel
   * User virtual memory is per process.
@@ -38,7 +163,7 @@
 
   * Argument Passing
     - Space separated arguments
-    - Argument length
+    - Argument length - 4KB
 
   * Process Termination
     - Print the name of user processes when exiting.
@@ -95,6 +220,3 @@
 
   * System call number is stored in user stack in user virtual address space.
   * System calls should be synchronized so that any number of user processes can make them at once.
-  * When system call handler gets control, system call number is in the 32-bit word at the caller's stack pointer, first argument is in the
-    32-bit word at the next higher address and so on.
-    - Avoid writing repeating code for implementations - fetching of arguments can be isolated.
