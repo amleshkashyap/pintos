@@ -123,6 +123,7 @@
       the syscall number and its arguments can be fetched (NOTE: syscall number is at the stack pointer, followed by arguments).
     - Syscalls that return a value can do so by modifying the "eax" member of the given interrupt frame structure.
 
+
 ## Virtual Memory Layout
   * User + Kernel
   * User virtual memory is per process.
@@ -220,3 +221,5 @@
 
   * System call number is stored in user stack in user virtual address space.
   * System calls should be synchronized so that any number of user processes can make them at once.
+  * When system call handler gets control, system call number is in the 32-bit word at the caller's stack pointer, first argument is in the
+    32-bit word at the next higher address and so on.
