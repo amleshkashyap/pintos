@@ -179,6 +179,9 @@ timer_interrupt (struct intr_frame *args UNUSED)
       thread_update_all_recent_cpu ();
     }
 
+    // TODO: assign another constant value without overloading a tick
+    if (ticks % TIMER_FREQ == 6) clean_orphan_threads ();
+
     if (ticks % 4 == 0) thread_update_all_priorities ();
   }
   thread_tick ();

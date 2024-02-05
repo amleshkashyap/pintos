@@ -38,10 +38,21 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
+  struct thread *cur = thread_current ();
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT+1, start_process, fn_copy);
-  if (tid == TID_ERROR)
+  tid = thread_create (file_name, cur->priority, start_process, fn_copy);
+  if (tid == TID_ERROR) {
     palloc_free_page (fn_copy);
+  } else {
+    printf("Created child thread: %d, by parent: %d\n", tid, thread_current ()->tid);
+    struct thread *child = get_thread_by_tid (tid);
+    child->user_thread = true;
+    child->pid = tid;
+    child->parent_pid = thread_current ()->tid;
+    child->exit_status = -2;
+    cur->children[cur->child_threads] = tid;
+    cur->child_threads += 1;
+  }
   return tid;
 }
 
@@ -117,6 +128,7 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
+  printf("Done exiting: %d\n", cur->tid);
 }
 
 /* Sets up the CPU for running user code in the current
@@ -486,11 +498,32 @@ push_arguments_to_stack (void **esp, char *program_name, int argc, char *args[])
       memcpy (t_esp + i, &zero, 1);
     }
     counter += pad;
+    
     /*
     void *zz = malloc (sizeof (int));
-    int k = 400;
-    memcpy (zz, &zero, sizeof (int));
+    memset (zz, 0, sizeof (int));
+    uint8_t one = 255;
+    printf("zz: %x\n", *(int *) zz);
+    for (int i = 0; i < 4; i++) {
+      if (i%2 == 0) memcpy (zz + i, &one, sizeof (uint8_t));
+      else memcpy (zz + i, &one, sizeof (uint8_t));
+      int val = *((int *) zz);
+      printf("int value after: %d, %d, %x\n", i, val, val);
+    }
     printf("int: %d\n", *(int *) zz);
+    
+    void *ptr = malloc (sizeof (char *));
+    memcpy (ptr, "one", sizeof (char *));
+    printf("ptr at: %p, value ptr: %s\n", ptr, ptr);
+    char *nptr = "two";
+    printf("nptr at: %p, value is: %s\n", nptr, nptr);
+    char **store = malloc (sizeof (char *));
+    memcpy (store, &ptr, sizeof (char *));
+    int address = *((int *) store);
+    printf("value: %s, address: %p\n", *store, address);
+    memcpy (store, &nptr, sizeof (char *));
+    address = *((int *) store);
+    printf("value: %s, address: %p\n", *store, address);
     */
   }
   t_esp -= sizeof (char *);
@@ -504,7 +537,7 @@ push_arguments_to_stack (void **esp, char *program_name, int argc, char *args[])
   t_esp -= sizeof (char *);
   memcpy (t_esp, &addresses[argc], sizeof (char *));
   counter += sizeof (char *);
-  char *argv_add = t_esp;
+  void *argv_add = t_esp;
   t_esp -= sizeof (char **);
   memcpy (t_esp, &argv_add, sizeof (char **));
   counter += sizeof (char **);
