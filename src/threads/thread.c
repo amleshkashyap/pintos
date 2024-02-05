@@ -29,6 +29,9 @@ static struct list ready_list;
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
 
+/* A user thread puts itself in the exited list at the end, kernel will evict it */
+// static struct list user_exited_list;
+
 /* Idle thread. */
 static struct thread *idle_thread;
 
@@ -99,6 +102,7 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
+  list_init (&user_exited_list);
 
   if (thread_mlfqs) {
     for (int i = 0; i <= PRI_MAX; i++) {
@@ -377,6 +381,30 @@ wakeup_threads (void)
   }
 }
 
+/* Finds the threads in user_exited_list whose parents are not present
+ * in all_list or user_exited list - prints and removes those threads
+ * If the parent is present in user_exited_list - prints and removes both
+*/
+void
+clean_orphan_threads (void)
+{
+  if (list_size (&user_exited_list) == 0) return;
+
+  struct list_elem *it, *t_it;
+  struct thread *t, *t_parent;
+
+  for (it = list_begin (&user_exited_list); it != list_end (&user_exited_list); it = list_next (it)) {
+    t = list_entry (it, struct thread, allelem);
+    t_parent = get_thread_by_pid (t->parent_pid);
+    // found an orphan thread
+    if (t_parent == NULL) {
+      t_it = it;
+      list_remove (it);
+      it = t_it;
+    }
+  }
+}
+
 /* fetch a thread from all_list -> useful for priority donation. Is this safe? */
 struct thread *
 get_thread_by_tid (int tid)
@@ -386,6 +414,36 @@ get_thread_by_tid (int tid)
   for(e = list_begin (&all_list); e != list_end (&all_list); e = list_next (e)) {
     t = list_entry (e, struct thread, allelem);
     if (t->tid == tid) {
+      return t;
+    }
+  }
+  return NULL;
+}
+
+/* fetch a thread from user_exited_list */
+struct thread *
+get_exited_user_thread_by_pid (pid_t pid)
+{
+  struct list_elem *e;
+  struct thread *t;
+  for(e = list_begin (&user_exited_list); e != list_end (&user_exited_list); e = list_next (e)) {
+    t = list_entry (e, struct thread, allelem);
+    if (t->pid == pid) {
+      return t;
+    }
+  }
+  return NULL;
+}
+
+/* fetch a thread from alllist by pid */
+struct thread *
+get_thread_by_pid (pid_t pid)
+{
+  struct list_elem *e;
+  struct thread *t;
+  for(e = list_begin (&all_list); e != list_end (&all_list); e = list_next (e)) {
+    t = list_entry (e, struct thread, allelem);
+    if (t->user_thread && t->pid == pid) {
       return t;
     }
   }
@@ -495,8 +553,14 @@ thread_exit (void)
      and schedule another process.  That process will destroy us
      when it calls thread_schedule_tail(). */
   intr_disable ();
-  list_remove (&thread_current()->allelem);
-  thread_current ()->status = THREAD_DYING;
+  struct thread *cur = thread_current ();
+  list_remove (&cur->allelem);
+  // printf("Thread is exiting: %d, user?: %d\n", cur->tid, cur->user_thread);
+  if (cur->user_thread) {
+    list_push_back (&user_exited_list, &cur->allelem);
+  }
+
+  cur->status = THREAD_DYING;
   ready_threads--;
   schedule ();
   NOT_REACHED ();
@@ -829,6 +893,8 @@ init_thread (struct thread *t, const char *name, int priority)
   t->magic = THREAD_MAGIC;
   t->wakeup_at = 0;
   t->sleeping = false;
+  t->user_thread = false;
+  t->child_threads = 0;
 
   if (!thread_mlfqs) {
     t->priority = priority;

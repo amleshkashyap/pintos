@@ -71,7 +71,7 @@ halt (void)
 void
 exit (int status)
 {
-  // printf("Exited\n");
+  printf("Exited with status: %d\n", status);
   syscall1 (SYS_EXIT, status);
   NOT_REACHED ();
 }

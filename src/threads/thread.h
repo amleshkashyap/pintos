@@ -18,6 +18,7 @@ enum thread_status
 /* Thread identifier type.
    You can redefine this to whatever type you like. */
 typedef int tid_t;
+typedef int pid_t;
 #define TID_ERROR ((tid_t) -1)          /* Error value for tid_t. */
 
 /* A kernel thread or user process.
@@ -112,12 +113,23 @@ struct thread
     /* for mlfqs */
     int nice;
     fxpoint recent_cpu;
+
+    /* user programs */
+    bool user_thread;
+    pid_t pid;
+    pid_t parent_pid;
+    int exit_status;
+
+    uint8_t child_threads;
+    int children[20];
   };
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
 extern bool thread_mlfqs;
+
+struct list user_exited_list;
 
 void thread_init (void);
 void thread_start (void);
@@ -139,9 +151,13 @@ void print_all_priorities (void);
 void thread_make_sleep (int64_t);
 void thread_wakeup (struct thread *);
 
+void clean_orphan_threads (void);
+
 /* utility */
 uint64_t total_ticks (void);
 struct thread * get_thread_by_tid (int);
+struct thread * get_thread_by_pid (pid_t);
+struct thread * get_exited_user_thread_by_pid (pid_t);
 
 void thread_block (void);
 void thread_unblock (struct thread *);
