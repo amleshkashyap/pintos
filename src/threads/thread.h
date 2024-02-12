@@ -21,6 +21,34 @@ typedef int tid_t;
 typedef int pid_t;
 #define TID_ERROR ((tid_t) -1)          /* Error value for tid_t. */
 
+#define TNAME_MAX 16
+#define MAX_CHILDREN 20
+#define MAX_PRIORITY_DONATION 8
+#define MAX_OPEN_FD 100
+#define MAX_OPEN_FD_THREAD 8
+#define INITIAL_FD 5
+
+struct children {
+  pid_t pid;
+  int exit_status;
+};
+
+struct file_desc {
+  int fd;
+  pid_t pid;
+  char filename[50];
+  void *pos;
+  unsigned size;
+  struct file *t_file;
+};
+
+struct file_desc t_file_descriptors[MAX_OPEN_FD];
+bool file_descriptors[MAX_OPEN_FD];
+struct lock *fd_lock;
+int allocate_fd (void);
+void free_fd (int);
+struct file_desc * get_file_descriptor (int);
+
 /* A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The
@@ -82,7 +110,7 @@ struct thread
     /* Owned by thread.c. */
     tid_t tid;                          /* Thread identifier. */
     enum thread_status status;          /* Thread state. */
-    char name[16];                      /* Name (for debugging purposes). */
+    char name[TNAME_MAX];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
     struct list_elem allelem;           /* List element for all threads list. */
@@ -104,8 +132,8 @@ struct thread
 
     /* for priority donation */
     int actual_priority;
-    int donated_priority[8];
-    tid_t donated_to[8];
+    int donated_priority[MAX_PRIORITY_DONATION];
+    tid_t donated_to[MAX_PRIORITY_DONATION];
     struct lock *donated_for;
     int donations_made;
     int donations_held;
@@ -120,16 +148,22 @@ struct thread
     pid_t parent_pid;
     int exit_status;
 
-    uint8_t child_threads;
-    int children[20];
+    /* for quick retrieval */
+    int child_threads;
+    struct children t_children[MAX_CHILDREN];
+
+    /* file descriptors */
+    int open_fds;
+    int fds[MAX_OPEN_FD_THREAD];
+    int last_open_fd;
+
+    struct semaphore *child_sema;
   };
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
 extern bool thread_mlfqs;
-
-struct list user_exited_list;
 
 void thread_init (void);
 void thread_start (void);
@@ -157,7 +191,6 @@ void clean_orphan_threads (void);
 uint64_t total_ticks (void);
 struct thread * get_thread_by_tid (int);
 struct thread * get_thread_by_pid (pid_t);
-struct thread * get_exited_user_thread_by_pid (pid_t);
 
 void thread_block (void);
 void thread_unblock (struct thread *);
@@ -188,5 +221,8 @@ void thread_recent_cpu_tick (void);
 void thread_update_all_recent_cpu (void);
 
 int all_ready_threads (void);
+
+/* for syscalls */
+int fetch_child_exit_status (pid_t);
 
 #endif /* threads/thread.h */

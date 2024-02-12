@@ -40,18 +40,22 @@ process_execute (const char *file_name)
 
   struct thread *cur = thread_current ();
   /* Create a new thread to execute FILE_NAME. */
+
+  /* Priority maybe larger than cur->priority, should be handled by proper cleanup */
   tid = thread_create (file_name, cur->priority, start_process, fn_copy);
+
   if (tid == TID_ERROR) {
     palloc_free_page (fn_copy);
   } else {
-    printf("Created child thread: %d, by parent: %d\n", tid, thread_current ()->tid);
+    /* child may've already completed and exited by this time if priority was larger
+     * still, the parent should store the childs pid/tid in case it'll call wait () later
+     * the user process exit mechanism should handle that */
     struct thread *child = get_thread_by_tid (tid);
-    child->user_thread = true;
-    child->pid = tid;
-    child->parent_pid = thread_current ()->tid;
-    child->exit_status = -2;
-    cur->children[cur->child_threads] = tid;
+    if (child != NULL) child->user_thread = true;
+    cur->t_children[cur->child_threads].pid = tid;
+    cur->t_children[cur->child_threads].exit_status = -2;
     cur->child_threads += 1;
+    // printf("Created child for: %d, child tid: %d, children: %d, added: %d\n", cur->tid, tid, cur->child_threads, cur->t_children[cur->child_threads - 1].pid);
   }
   return tid;
 }
@@ -97,12 +101,12 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid) 
 {
   for (; ;) {
-    continue;
+    if (get_thread_by_tid (child_tid) == NULL) break;
   }
-  // return -1;
+  return -1;
 }
 
 /* Free the current process's resources. */
@@ -128,7 +132,6 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
-  printf("Done exiting: %d\n", cur->tid);
 }
 
 /* Sets up the CPU for running user code in the current
@@ -226,6 +229,9 @@ bool
 load (const char *file_name, void (**eip) (void), void **esp) 
 {
   struct thread *t = thread_current ();
+  t->user_thread = true;
+  struct thread *parent = get_thread_by_pid (t->parent_pid);
+
   struct Elf32_Ehdr ehdr;
   struct file *file = NULL;
   off_t file_ofs;
@@ -233,16 +239,20 @@ load (const char *file_name, void (**eip) (void), void **esp)
   int i;
 
   char *t_args, *token;
+  /* separate out program name first */
   strtok_r (file_name, " ", &t_args);
   char *program_name = file_name;
+
   int counter = 0;
-  char *args[20];
+  char *args[MAX_ARGS];
+
   for (token = strtok_r (t_args, " ", &t_args); token != NULL; token = strtok_r (NULL, " ", &t_args)) {
      args[counter] = token;
      counter++;
-     // Throw error
-     if (counter == 20) break;
+     // TODO: Throw error?
+     if (counter == MAX_ARGS) break;
   }
+
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
   if (t->pagedir == NULL) 
@@ -330,9 +340,13 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp)) goto done;
+  if (!setup_stack (esp))
+    goto done;
 
   push_arguments_to_stack (esp, program_name, counter, args);
+
+  /* overwrite thread_name with user program name for printing at thread_exit (). Also, mark as user thread. */
+  strlcpy (t->name, program_name, TNAME_MAX);
 
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
@@ -341,10 +355,11 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
-  if (program_name != "halt") {
-    printf ("%s: exit(%d)\n", program_name, success);
+  if (parent != NULL) {
+    // printf("Upping\n");
+    sema_up (&parent->child_sema);
   }
+  file_close (file);
   return success;
 }
 
@@ -459,98 +474,81 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 static bool
 push_arguments_to_stack (void **esp, char *program_name, int argc, char *args[])
 {
-  size_t intsize = sizeof (int);
-  size_t charsize = sizeof (char);
-
-  /*  
-  if (argc == 1) {
-    printf("stack is at: %x, holds the value: %x\nargc: %d, args: %s\n", esp, *esp, argc, *args);
-  } else if (argc > 1) {
-    printf("stack is at: %x, holds the value: %x\nargc: %d, args: %s, %s\n", esp, *esp, argc, *args, *(args + 1));
-  } */
-
   void *t_esp = *esp;
-  char *addresses[20];
-  int counter;
-  for (int i = 0; i < argc; i++) {
-    t_esp = t_esp - 1;
+  char *addresses[MAX_ARGS];
+  int counter = 0;
+
+  /* push arguments and store the addresses */
+  for (int i = argc-1; i >= 0; i--) {
+    t_esp -= 1;
     memset (t_esp, (char) 0, 1);
     size_t sz = strlen (args[i]);
     t_esp -= sz;
-    memcpy (t_esp, args[i], sz * charsize);
+    memcpy (t_esp, args[i], sz * sizeof (char));
     addresses[i] = t_esp;
     counter += (sz + 1);
   }
 
   t_esp -= 1;
   memset (t_esp, (char) 0, 1);
+
+  /* push program name and store its address */
   size_t sz = strlen (program_name);
   t_esp = (char *) t_esp - sz;
-  memcpy (t_esp, program_name, sz * charsize);
+  memcpy (t_esp, program_name, sz * sizeof (char));
   addresses[argc] = t_esp;
   counter += (sz + 1);
+
+  /* check for required padding and add it */
   uint8_t pad = (size_t) t_esp % 4;
   if (pad != 0) {
     t_esp -= pad;
     uint8_t zero = 0;
-    printf("word pad: %d, t_esp at: %x\n", pad, t_esp);
     for (int i = 0; i < pad; i++) {
       memcpy (t_esp + i, &zero, 1);
     }
     counter += pad;
-    
-    /*
-    void *zz = malloc (sizeof (int));
-    memset (zz, 0, sizeof (int));
-    uint8_t one = 255;
-    printf("zz: %x\n", *(int *) zz);
-    for (int i = 0; i < 4; i++) {
-      if (i%2 == 0) memcpy (zz + i, &one, sizeof (uint8_t));
-      else memcpy (zz + i, &one, sizeof (uint8_t));
-      int val = *((int *) zz);
-      printf("int value after: %d, %d, %x\n", i, val, val);
-    }
-    printf("int: %d\n", *(int *) zz);
-    
-    void *ptr = malloc (sizeof (char *));
-    memcpy (ptr, "one", sizeof (char *));
-    printf("ptr at: %p, value ptr: %s\n", ptr, ptr);
-    char *nptr = "two";
-    printf("nptr at: %p, value is: %s\n", nptr, nptr);
-    char **store = malloc (sizeof (char *));
-    memcpy (store, &ptr, sizeof (char *));
-    int address = *((int *) store);
-    printf("value: %s, address: %p\n", *store, address);
-    memcpy (store, &nptr, sizeof (char *));
-    address = *((int *) store);
-    printf("value: %s, address: %p\n", *store, address);
-    */
   }
+
   t_esp -= sizeof (char *);
   memset (t_esp, 0, sizeof (char *));
   counter += sizeof (char *);
-  for (int i = 0; i < argc; i++) {
+
+  /* push the argument addresses */
+  for (int i = argc-1; i >= 0; i--) {
     t_esp -= sizeof (char *);
     memcpy (t_esp, &addresses[i], sizeof (char *));
     counter += (sizeof (char *));
   }
+
+  /* push the addresses of program */
   t_esp -= sizeof (char *);
   memcpy (t_esp, &addresses[argc], sizeof (char *));
   counter += sizeof (char *);
+
+  /* store the address of argv to be pushed */
   void *argv_add = t_esp;
   t_esp -= sizeof (char **);
   memcpy (t_esp, &argv_add, sizeof (char **));
   counter += sizeof (char **);
-  t_esp -= intsize;
-  counter += intsize;
+
+  /* push argc */
+  t_esp -= sizeof (int);
+  counter += sizeof (int);
   argc++;
-  memcpy (t_esp, &argc, intsize);
+  memcpy (t_esp, &argc, sizeof (int));
+
+  /* push fake return address */
   t_esp -= sizeof (void *);
   memcpy (t_esp, &argv_add, sizeof (void *));
   counter += sizeof (void *);
+
+  /* set the stack pointer back to the current address */
   *esp = t_esp;
-  hex_dump (*esp, *esp, counter, true);
-  printf("*esp set at: %x, esp: %x, &esp: %x, bytes: %d\n", *esp, esp, &esp, counter);
+  /* hex dump for debugging */
+  // hex_dump (*esp, *esp, counter, true);
+  // printf("*esp set at: %x, esp: %x, &esp: %x, bytes: %d\n", *esp, esp, &esp, counter);
+  
   return true;
 }
 
@@ -570,10 +568,9 @@ setup_stack (void **esp)
         *esp = PHYS_BASE;
       } else {
         palloc_free_page (kpage);
-        return false;
       }
     }
-  return true;
+  return success;
 }
 
 /* Adds a mapping from user virtual address UPAGE to kernel
