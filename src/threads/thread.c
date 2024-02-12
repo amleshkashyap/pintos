@@ -29,9 +29,6 @@ static struct list ready_list;
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
 
-/* A user thread puts itself in the exited list at the end, kernel will evict it */
-// static struct list user_exited_list;
-
 /* Idle thread. */
 static struct thread *idle_thread;
 
@@ -100,9 +97,9 @@ thread_init (void)
   ASSERT (intr_get_level () == INTR_OFF);
 
   lock_init (&tid_lock);
+  lock_init (&fd_lock);
   list_init (&ready_list);
   list_init (&all_list);
-  list_init (&user_exited_list);
 
   if (thread_mlfqs) {
     for (int i = 0; i <= PRI_MAX; i++) {
@@ -208,11 +205,20 @@ thread_create (const char *name, int priority,
   /* only after tid is allocated, update the nice values
    * assuming that initial and idle thread are tid 1 and 2 */
   struct thread *cur = thread_current ();
-  if (thread_mlfqs && tid > 2) {
-    t->nice = cur->nice;
-    // thread is yielded at the bottom
-    t->priority = calculate_priority (t->recent_cpu, t->nice);
-    t->actual_priority = t->priority;
+  if (tid > 2) {
+    /* do pid = tid for every thread -> mark as non-user thread though for identification
+     * set the parent_pid for every thread as the current thread. also set initial exit_status */
+    t->user_thread = false;
+    t->pid = t->tid;
+    t->parent_pid = cur->tid;
+    t->exit_status = -2;
+
+    if (thread_mlfqs) {
+      t->nice = cur->nice;
+      // thread is yielded at the bottom
+      t->priority = calculate_priority (t->recent_cpu, t->nice);
+      t->actual_priority = t->priority;
+    }
   }
 
   /* Stack frame for kernel_thread(). */
@@ -290,7 +296,7 @@ donate_priority (struct thread *cur, struct thread *holder, struct lock *l)
   }
 
   ASSERT (cur->donations_made == 0);
-  ASSERT (holder->donations_made <= 7);
+  ASSERT (holder->donations_made <= MAX_PRIORITY_DONATION - 1);
 
   cur->donated_for = l;
   cur->donations_made++;
@@ -381,57 +387,23 @@ wakeup_threads (void)
   }
 }
 
-/* Finds the threads in user_exited_list whose parents are not present
- * in all_list or user_exited list - prints and removes those threads
- * If the parent is present in user_exited_list - prints and removes both
-*/
-void
-clean_orphan_threads (void)
-{
-  if (list_size (&user_exited_list) == 0) return;
-
-  struct list_elem *it, *t_it;
-  struct thread *t, *t_parent;
-
-  for (it = list_begin (&user_exited_list); it != list_end (&user_exited_list); it = list_next (it)) {
-    t = list_entry (it, struct thread, allelem);
-    t_parent = get_thread_by_pid (t->parent_pid);
-    // found an orphan thread
-    if (t_parent == NULL) {
-      t_it = it;
-      list_remove (it);
-      it = t_it;
-    }
-  }
-}
-
 /* fetch a thread from all_list -> useful for priority donation. Is this safe? */
 struct thread *
 get_thread_by_tid (int tid)
 {
   struct list_elem *e;
   struct thread *t;
+  enum intr_level old_level = intr_disable ();
+
   for(e = list_begin (&all_list); e != list_end (&all_list); e = list_next (e)) {
     t = list_entry (e, struct thread, allelem);
     if (t->tid == tid) {
+      intr_set_level (old_level);
       return t;
     }
   }
-  return NULL;
-}
 
-/* fetch a thread from user_exited_list */
-struct thread *
-get_exited_user_thread_by_pid (pid_t pid)
-{
-  struct list_elem *e;
-  struct thread *t;
-  for(e = list_begin (&user_exited_list); e != list_end (&user_exited_list); e = list_next (e)) {
-    t = list_entry (e, struct thread, allelem);
-    if (t->pid == pid) {
-      return t;
-    }
-  }
+  intr_set_level (old_level);
   return NULL;
 }
 
@@ -439,14 +411,18 @@ get_exited_user_thread_by_pid (pid_t pid)
 struct thread *
 get_thread_by_pid (pid_t pid)
 {
+  enum intr_level old_level = intr_disable ();
   struct list_elem *e;
   struct thread *t;
   for(e = list_begin (&all_list); e != list_end (&all_list); e = list_next (e)) {
     t = list_entry (e, struct thread, allelem);
     if (t->user_thread && t->pid == pid) {
+      intr_set_level (old_level);
       return t;
     }
   }
+
+  intr_set_level (old_level);
   return NULL;
 }
 
@@ -555,9 +531,22 @@ thread_exit (void)
   intr_disable ();
   struct thread *cur = thread_current ();
   list_remove (&cur->allelem);
-  // printf("Thread is exiting: %d, user?: %d\n", cur->tid, cur->user_thread);
+
   if (cur->user_thread) {
-    list_push_back (&user_exited_list, &cur->allelem);
+    if (cur->exit_status == -2) {
+      cur->exit_status = -1;
+    }
+    printf("%s: exit(%d)\n", cur->name, cur->exit_status);
+
+    struct thread *parent = get_thread_by_pid (cur->parent_pid);
+    if (is_thread (parent)) {
+      for (int i = 0; i < parent->child_threads; i++) {
+        if (parent->t_children[i].pid == cur->pid) {
+          parent->t_children[i].exit_status = cur->exit_status;
+          break;
+        }
+      }
+    }
   }
 
   cur->status = THREAD_DYING;
@@ -796,6 +785,31 @@ thread_set_recent_cpu (struct thread *t)
   t->recent_cpu = calculate_recent_cpu (t->recent_cpu, load_average, t->nice);
 }
 
+/* this method finds if pid is child of t, and gets its index if found
+ * removes it from the list of exited processes and reduces child thread count
+ * since a process thread is single, no locking should be required */
+int
+fetch_child_exit_status (pid_t pid)
+{
+  struct thread *cur = thread_current ();
+  if (cur->child_threads < 1) {
+    return -1;
+  }
+
+  for (int i = 0; i < cur->child_threads; i++) {
+    if (cur->t_children[i].pid == pid) {
+      int exit_status = cur->t_children[i].exit_status;
+      if (exit_status != -2) {
+        cur->t_children[i].pid = 0;
+        cur->t_children[i].exit_status = -2;
+        cur->child_threads--;
+      }
+      return exit_status;
+    }
+  }
+  return -1;
+}
+
 int
 all_ready_threads (void)
 {
@@ -893,7 +907,6 @@ init_thread (struct thread *t, const char *name, int priority)
   t->magic = THREAD_MAGIC;
   t->wakeup_at = 0;
   t->sleeping = false;
-  t->user_thread = false;
   t->child_threads = 0;
 
   if (!thread_mlfqs) {
@@ -1155,6 +1168,42 @@ allocate_tid (void)
   lock_release (&tid_lock);
 
   return tid;
+}
+
+/* returns the first available fd for a requesting thread */
+int
+allocate_fd (void)
+{
+  int fd = -1;
+  lock_acquire (&fd_lock);
+  for (int i = 0; i < MAX_OPEN_FD; i++) {
+    if (file_descriptors[i] == false) {
+      fd = i + INITIAL_FD;
+      file_descriptors[i] = true;
+      break;
+    }
+  }
+  lock_release (&fd_lock);
+  return fd;
+}
+
+void
+free_fd (int fd)
+{
+  lock_acquire (&fd_lock);
+  file_descriptors[fd-INITIAL_FD] = false;
+  struct file_desc *fdsc = &t_file_descriptors[fd-INITIAL_FD];
+  fdsc->pid = 0;
+  fdsc->fd = 0;
+  fdsc->pos = NULL;
+  fdsc->t_file = NULL;
+  lock_release (&fd_lock);
+}
+
+struct file_desc *
+get_file_descriptor (int fd)
+{
+  return &t_file_descriptors[fd-INITIAL_FD];
 }
 
 /* Offset of `stack' member within `struct thread'.
