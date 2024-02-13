@@ -53,7 +53,6 @@ process_execute (const char *file_name)
     cur->t_children[cur->child_threads].pid = tid;
     cur->t_children[cur->child_threads].exit_status = -2;
     cur->child_threads++;
-    // printf("Created child for: %d, child tid: %d, children: %d, added: %d\n", cur->tid, tid, cur->child_threads, cur->t_children[cur->child_threads - 1].pid);
   }
   return tid;
 }

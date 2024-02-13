@@ -7,7 +7,6 @@
   * Virtual Memory - Kernel vs User
     - The interrupt frame for user process is contructed in the kernel
     - In the interrupt frame, the stack pointer must point to an address according to the virtual memory for the user
-    - Arguments have to be stored according to that as well - however, it's not clear where exactly should the arguments be stored.
 
   * Elf32\_Addr - 
   * Elf32\_Word
@@ -22,7 +21,7 @@
 ## Functions
   * process\_execute
     - Takes a filename as the argument, makes a copy of the file in a new page.
-    - Creates a new thread with start\_process and the above copy of file as argument - fFrees the new page if there was an error
+    - Creates a new thread with start\_process and the above copy of file as argument - Frees the new page if there was an error
 
   * start\_process
     - Takes the filename as an argument
@@ -55,6 +54,10 @@
     - Adds a mapping from user virtual address (say upage) to kernel virtual address (say kpage) in the page table. upage must not be
       already mapped and kpage is to be obtained from user pool. Page should ideally be writable by user.
 
+  * filesys\* and file\* methods - For file related system calls, these can be used without any modification, they handle the accounting
+    for newly created files as well as number of file write denials. Mapping of the file created by filesys to fd has to be handled via the
+    syscalls.
+
 ## Workflows
   * Initialization
     - In Make.vars, USERPROG is defined
@@ -69,6 +72,22 @@
       - Copying of filename is only done for 1 page size -> hence the restriction of 4KB for arguments.
     - Created thread executes start\_process method, which internally calls the load () method
       - load () method does all the actual work of execution
+
+  * System Calls
+    - A user process is same as a thread -> however, once they make a system call, the thread switches to the kernel mode where everything
+      is accessible. Since user programs have their own virtual memory, going from 0 to PHYS\_BASE, in kernel mode, it should ensure that
+      it doesn't allow itself to read any data from the kernel space, except for performing the accounting activities (eg, getting
+      page table information for validation, etc).
+    - More security check can be enforced here to block user programs from harming other threads as in kernel mode, it can effect them - for
+      now though, a child thread changes the data of its parent thread (parent reads the data of child thread).
+    - Once the boundaries are checked, there's no other protective mechanisms.
+
+## Concerns
+  * Certain tests don't work with 2MB filesys hence its changed to 4MB by default.
+  * Filesys open method fails to load an existing program - dir\_close is commented for it to work.
+  * FDs are kept to max of 10 so that some tests can pass within timeout.
+  * FD management methods are added in threads directory, but they maybe somewhere else too.
+  * A process can't exec more than 20 children, even though they've died -> it must wait for them if it wants to clean such children.
 
 ## Program Startup
   * 80x86 Calling Convention
