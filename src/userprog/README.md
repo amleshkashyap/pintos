@@ -83,7 +83,6 @@
     - Once the boundaries are checked, there's no other protective mechanisms.
 
 ## Synchronization
-  * A fd lock is used to allocate a new file descriptor - it's not used when freeing the fd though.
   * A semaphore is present for every thread which waits for exec'd child to finish loading.
   * In process\_wait, an infinite for loop runs and waits for a given tid to return a NULL value, meaning the thread is removed from the
     system (ie, killed), hence the executor can stop waiting - needs to be fixed to be same as wait (as it has to return exit status) - for
@@ -93,9 +92,9 @@
 ## Concerns
   * Certain tests don't work with 2MB filesys hence its changed to 4MB by default.
   * Filesys open method fails to load an existing program - dir\_close is commented for it to work.
-  * FDs are kept to max of 10 so that some tests can pass within timeout.
+  * FDs are kept to max of 10 per process - in multi-oom, upto 126 fds are attempted for allocation.
   * FD management methods are added in threads directory, but they maybe somewhere else too.
-  * A process can't exec more than 20 children, even though they've died -> it must wait for them if it wants to clean such children.
+  * A process can't exec more than 10 children, even though they've died -> it must wait for them if it wants to clean such children.
 
 ## Program Startup
   * 80x86 Calling Convention
