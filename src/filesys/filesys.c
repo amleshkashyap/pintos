@@ -71,7 +71,9 @@ filesys_open (const char *name)
 
   if (dir != NULL)
     dir_lookup (dir, name, &inode);
-  dir_close (dir);
+
+  /* TODO: for some reason, load fails in syn-read only if dir is closed */
+  // dir_close (dir);
 
   return file_open (inode);
 }

@@ -9,7 +9,6 @@
 #include "threads/intr-stubs.h"
 #include "threads/palloc.h"
 #include "threads/switch.h"
-#include "threads/synch.h"
 #include "threads/vaddr.h"
 #include "devices/timer.h"
 #ifdef USERPROG
@@ -34,6 +33,10 @@ static struct thread *idle_thread;
 
 /* Initial thread, the thread running init.c:main(). */
 static struct thread *initial_thread;
+
+static struct file_desc file_descriptors[MAX_OPEN_FD];
+static struct lock fd_lock;
+static int open_fds = 0;
 
 /* Lock used by allocate_tid(). */
 static struct lock tid_lock;
@@ -77,6 +80,7 @@ static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
+static void close_open_fds (void);
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -106,6 +110,8 @@ thread_init (void)
       list_init (&multilevel_lists[i]);
     }
   }
+
+  for (int i = 0; i < MAX_OPEN_FD; i++) file_descriptors[i].t_file = NULL;
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -219,6 +225,8 @@ thread_create (const char *name, int priority,
       t->priority = calculate_priority (t->recent_cpu, t->nice);
       t->actual_priority = t->priority;
     }
+
+    sema_init (&t->child_sema, 0);
   }
 
   /* Stack frame for kernel_thread(). */
@@ -411,19 +419,9 @@ get_thread_by_tid (int tid)
 struct thread *
 get_thread_by_pid (pid_t pid)
 {
-  enum intr_level old_level = intr_disable ();
-  struct list_elem *e;
-  struct thread *t;
-  for(e = list_begin (&all_list); e != list_end (&all_list); e = list_next (e)) {
-    t = list_entry (e, struct thread, allelem);
-    if (t->user_thread && t->pid == pid) {
-      intr_set_level (old_level);
-      return t;
-    }
-  }
-
-  intr_set_level (old_level);
-  return NULL;
+  struct thread *t = get_thread_by_tid (pid);
+  if (!is_thread (t) || t->user_thread == false) return NULL;
+  return t;
 }
 
 /* Puts the current thread to sleep.  It will not be scheduled
@@ -533,10 +531,10 @@ thread_exit (void)
   list_remove (&cur->allelem);
 
   if (cur->user_thread) {
-    if (cur->exit_status == -2) {
-      cur->exit_status = -1;
-    }
+    if (cur->exit_status == -2) cur->exit_status = -1;
     printf("%s: exit(%d)\n", cur->name, cur->exit_status);
+
+    close_open_fds ();
 
     struct thread *parent = get_thread_by_pid (cur->parent_pid);
     if (is_thread (parent)) {
@@ -549,6 +547,7 @@ thread_exit (void)
     }
   }
 
+  file_close (cur->exfile);
   cur->status = THREAD_DYING;
   ready_threads--;
   schedule ();
@@ -791,8 +790,10 @@ thread_set_recent_cpu (struct thread *t)
 int
 fetch_child_exit_status (pid_t pid)
 {
+  enum intr_level old_level = intr_disable ();
   struct thread *cur = thread_current ();
   if (cur->child_threads < 1) {
+    intr_set_level (old_level);
     return -1;
   }
 
@@ -800,13 +801,20 @@ fetch_child_exit_status (pid_t pid)
     if (cur->t_children[i].pid == pid) {
       int exit_status = cur->t_children[i].exit_status;
       if (exit_status != -2) {
-        cur->t_children[i].pid = 0;
-        cur->t_children[i].exit_status = -2;
+        if (cur->child_threads == 1) {
+          cur->t_children[i].pid = 0;
+          cur->t_children[i].exit_status = -2;
+        } else {
+          cur->t_children[i].pid = cur->t_children[cur->child_threads-1].pid;
+          cur->t_children[i].exit_status = cur->t_children[cur->child_threads-1].exit_status;
+        }
         cur->child_threads--;
       }
+      intr_set_level (old_level);
       return exit_status;
     }
   }
+  intr_set_level (old_level);
   return -1;
 }
 
@@ -1174,12 +1182,14 @@ allocate_tid (void)
 int
 allocate_fd (void)
 {
+  if (open_fds == MAX_OPEN_FD) return -1;
   int fd = -1;
   lock_acquire (&fd_lock);
   for (int i = 0; i < MAX_OPEN_FD; i++) {
-    if (file_descriptors[i] == false) {
+    if (file_descriptors[i].pid == 0) {
+      file_descriptors[i].pid = thread_current ()->pid;
       fd = i + INITIAL_FD;
-      file_descriptors[i] = true;
+      open_fds++;
       break;
     }
   }
@@ -1191,19 +1201,39 @@ void
 free_fd (int fd)
 {
   lock_acquire (&fd_lock);
-  file_descriptors[fd-INITIAL_FD] = false;
-  struct file_desc *fdsc = &t_file_descriptors[fd-INITIAL_FD];
-  fdsc->pid = 0;
-  fdsc->fd = 0;
-  fdsc->pos = NULL;
-  fdsc->t_file = NULL;
+  file_descriptors[fd-INITIAL_FD].pid = 0;
+  file_descriptors[fd-INITIAL_FD].t_file == NULL;
+  open_fds--;
   lock_release (&fd_lock);
 }
 
-struct file_desc *
-get_file_descriptor (int fd)
+bool
+is_valid_fd (int fd)
 {
-  return &t_file_descriptors[fd-INITIAL_FD];
+  if (fd >= 0 && fd < INITIAL_FD) return true;
+  if (fd < 0 || fd > MAX_OPEN_FD + INITIAL_FD || file_descriptors[fd-INITIAL_FD].t_file == NULL ||
+                                                 file_descriptors[fd-INITIAL_FD].pid != thread_current ()->pid)
+    return false;
+  return true;
+}
+
+struct file *
+get_file (int fd)
+{
+  return file_descriptors[fd-INITIAL_FD].t_file;
+}
+
+void
+set_file (int fd, struct file *t_file)
+{
+  file_descriptors[fd-INITIAL_FD].t_file = t_file;
+}
+
+static void
+close_open_fds (void)
+{
+  pid_t pid = thread_current ()->pid;
+  for (int i = 0; i < MAX_OPEN_FD; i++) if (file_descriptors[i].pid == pid) free_fd (i + INITIAL_FD);
 }
 
 /* Offset of `stack' member within `struct thread'.
