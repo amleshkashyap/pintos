@@ -206,7 +206,7 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
-  // printf("Thread with name, tid, priority %s, %d, %d\n", t->name, tid, t->priority);
+  // printf("Thread with name, tid, priority %s, %d, %d, open_fds: %d\n", t->name, tid, t->priority, open_fds);
 
   /* only after tid is allocated, update the nice values
    * assuming that initial and idle thread are tid 1 and 2 */
@@ -227,6 +227,7 @@ thread_create (const char *name, int priority,
     }
 
     sema_init (&t->child_sema, 0);
+    t->open_fds = 0;
   }
 
   /* Stack frame for kernel_thread(). */
@@ -1184,15 +1185,18 @@ allocate_fd (void)
 {
   if (open_fds == MAX_OPEN_FD) return -1;
   int fd = -1;
+  struct thread *cur = thread_current ();
   lock_acquire (&fd_lock);
   for (int i = 0; i < MAX_OPEN_FD; i++) {
     if (file_descriptors[i].pid == 0) {
-      file_descriptors[i].pid = thread_current ()->pid;
+      file_descriptors[i].pid = cur->pid;
       fd = i + INITIAL_FD;
       open_fds++;
+      cur->open_fds++;
       break;
     }
   }
+
   lock_release (&fd_lock);
   return fd;
 }
@@ -1200,11 +1204,9 @@ allocate_fd (void)
 void
 free_fd (int fd)
 {
-  lock_acquire (&fd_lock);
   file_descriptors[fd-INITIAL_FD].pid = 0;
-  file_descriptors[fd-INITIAL_FD].t_file == NULL;
   open_fds--;
-  lock_release (&fd_lock);
+  thread_current ()->open_fds--;
 }
 
 bool
@@ -1232,8 +1234,16 @@ set_file (int fd, struct file *t_file)
 static void
 close_open_fds (void)
 {
-  pid_t pid = thread_current ()->pid;
-  for (int i = 0; i < MAX_OPEN_FD; i++) if (file_descriptors[i].pid == pid) free_fd (i + INITIAL_FD);
+  struct thread *cur = thread_current ();
+  if (cur->open_fds == 0) return;
+  pid_t pid = cur->pid;
+  for (int i = 0; i < MAX_OPEN_FD; i++) {
+    if (file_descriptors[i].pid == pid) {
+      file_descriptors[i].pid = 0;
+      open_fds--;
+      cur->open_fds--;
+    }
+  }
 }
 
 /* Offset of `stack' member within `struct thread'.
