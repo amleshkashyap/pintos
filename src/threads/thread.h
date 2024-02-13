@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/fixed-point.h"
+#include "threads/synch.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -21,12 +22,11 @@ typedef int tid_t;
 typedef int pid_t;
 #define TID_ERROR ((tid_t) -1)          /* Error value for tid_t. */
 
-#define TNAME_MAX 16
-#define MAX_CHILDREN 20
+#define TNAME_MAX 32
+#define MAX_CHILDREN 30
 #define MAX_PRIORITY_DONATION 8
-#define MAX_OPEN_FD 100
-#define MAX_OPEN_FD_THREAD 8
-#define INITIAL_FD 5
+#define MAX_OPEN_FD 1000
+#define INITIAL_FD 2
 
 struct children {
   pid_t pid;
@@ -34,20 +34,9 @@ struct children {
 };
 
 struct file_desc {
-  int fd;
   pid_t pid;
-  char filename[50];
-  void *pos;
-  unsigned size;
   struct file *t_file;
 };
-
-struct file_desc t_file_descriptors[MAX_OPEN_FD];
-bool file_descriptors[MAX_OPEN_FD];
-struct lock *fd_lock;
-int allocate_fd (void);
-void free_fd (int);
-struct file_desc * get_file_descriptor (int);
 
 /* A kernel thread or user process.
 
@@ -152,12 +141,10 @@ struct thread
     int child_threads;
     struct children t_children[MAX_CHILDREN];
 
-    /* file descriptors */
-    int open_fds;
-    int fds[MAX_OPEN_FD_THREAD];
-    int last_open_fd;
+    struct file *exfile;
 
-    struct semaphore *child_sema;
+    /* exec synch */
+    struct semaphore child_sema;
   };
 
 /* If false (default), use round-robin scheduler.
@@ -224,5 +211,12 @@ int all_ready_threads (void);
 
 /* for syscalls */
 int fetch_child_exit_status (pid_t);
+
+/* for file syscalls */
+bool is_valid_fd (int);
+int allocate_fd (void);
+void free_fd (int);
+struct file * get_file (int);
+void set_file (int, struct file*);
 
 #endif /* threads/thread.h */

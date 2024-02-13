@@ -50,11 +50,9 @@ process_execute (const char *file_name)
     /* child may've already completed and exited by this time if priority was larger
      * still, the parent should store the childs pid/tid in case it'll call wait () later
      * the user process exit mechanism should handle that */
-    struct thread *child = get_thread_by_tid (tid);
-    if (child != NULL) child->user_thread = true;
     cur->t_children[cur->child_threads].pid = tid;
     cur->t_children[cur->child_threads].exit_status = -2;
-    cur->child_threads += 1;
+    cur->child_threads++;
     // printf("Created child for: %d, child tid: %d, children: %d, added: %d\n", cur->tid, tid, cur->child_threads, cur->t_children[cur->child_threads - 1].pid);
   }
   return tid;
@@ -75,10 +73,15 @@ start_process (void *file_name_)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
+  if (!success) thread_current ()->exit_status = -1;
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
-  if (!success) 
+
+  struct thread *parent = get_thread_by_pid (thread_current ()->parent_pid);
+  if (parent != NULL) sema_up (&parent->child_sema);
+
+  if (!success)
     thread_exit ();
 
   /* Start the user process by simulating a return from an
@@ -230,7 +233,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
 {
   struct thread *t = thread_current ();
   t->user_thread = true;
-  struct thread *parent = get_thread_by_pid (t->parent_pid);
 
   struct Elf32_Ehdr ehdr;
   struct file *file = NULL;
@@ -242,6 +244,9 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* separate out program name first */
   strtok_r (file_name, " ", &t_args);
   char *program_name = file_name;
+
+  /* overwrite thread_name with user program name for printing at thread_exit (). Also, mark as user thread. */
+  strlcpy (t->name, program_name, TNAME_MAX);
 
   int counter = 0;
   char *args[MAX_ARGS];
@@ -260,12 +265,15 @@ load (const char *file_name, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
-  file = filesys_open (file_name);
+  file = filesys_open (program_name);
   if (file == NULL) 
     {
-      printf ("load: %s: open failed\n", file_name);
+      printf ("load: %s: open failed\n", program_name);
       goto done; 
     }
+
+  t->exfile = file;
+  file_deny_write (file);
 
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -345,9 +353,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
   push_arguments_to_stack (esp, program_name, counter, args);
 
-  /* overwrite thread_name with user program name for printing at thread_exit (). Also, mark as user thread. */
-  strlcpy (t->name, program_name, TNAME_MAX);
-
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
 
@@ -355,11 +360,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  if (parent != NULL) {
-    // printf("Upping\n");
-    sema_up (&parent->child_sema);
-  }
-  file_close (file);
   return success;
 }
 
