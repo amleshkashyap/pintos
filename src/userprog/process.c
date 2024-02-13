@@ -38,10 +38,22 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
+  struct thread *cur = thread_current ();
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
-  if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+
+  /* Priority maybe larger than cur->priority, should be handled by proper cleanup */
+  tid = thread_create (file_name, cur->priority, start_process, fn_copy);
+
+  if (tid == TID_ERROR) {
+    palloc_free_page (fn_copy);
+  } else {
+    /* child may've already completed and exited by this time if priority was larger
+     * still, the parent should store the childs pid/tid in case it'll call wait () later
+     * the user process exit mechanism should handle that */
+    cur->t_children[cur->child_threads].pid = tid;
+    cur->t_children[cur->child_threads].exit_status = -2;
+    cur->child_threads++;
+  }
   return tid;
 }
 
@@ -61,9 +73,18 @@ start_process (void *file_name_)
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
 
+  if (!success) {
+    thread_current ()->exit_status = -1;
+    update_exit_status_for_parent ();
+  }
+
   /* If load failed, quit. */
   palloc_free_page (file_name);
-  if (!success) 
+
+  struct thread *parent = get_thread_by_pid (thread_current ()->parent_pid);
+  if (parent != NULL) sema_up (&parent->child_sema);
+
+  if (!success)
     thread_exit ();
 
   /* Start the user process by simulating a return from an
@@ -86,8 +107,11 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid) 
 {
+  for (; ;) {
+    if (get_thread_by_tid (child_tid) == NULL) break;
+  }
   return -1;
 }
 
@@ -196,6 +220,8 @@ struct Elf32_Phdr
 #define PF_R 4          /* Readable. */
 
 static bool setup_stack (void **esp);
+static bool push_arguments_to_stack (void **esp, char *program_name, int argc, char *args[]);
+
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
@@ -209,11 +235,31 @@ bool
 load (const char *file_name, void (**eip) (void), void **esp) 
 {
   struct thread *t = thread_current ();
+  t->user_thread = true;
+
   struct Elf32_Ehdr ehdr;
   struct file *file = NULL;
   off_t file_ofs;
   bool success = false;
   int i;
+
+  char *t_args, *token;
+  /* separate out program name first */
+  strtok_r (file_name, " ", &t_args);
+  char *program_name = file_name;
+
+  /* overwrite thread_name with user program name for printing at thread_exit (). Also, mark as user thread. */
+  strlcpy (t->name, program_name, TNAME_MAX);
+
+  int counter = 0;
+  char *args[MAX_ARGS];
+
+  for (token = strtok_r (t_args, " ", &t_args); token != NULL; token = strtok_r (NULL, " ", &t_args)) {
+     args[counter] = token;
+     counter++;
+     // TODO: Throw error?
+     if (counter == MAX_ARGS) break;
+  }
 
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
@@ -222,12 +268,15 @@ load (const char *file_name, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
-  file = filesys_open (file_name);
+  file = filesys_open (program_name);
   if (file == NULL) 
     {
-      printf ("load: %s: open failed\n", file_name);
+      printf ("load: %s: open failed\n", program_name);
       goto done; 
     }
+
+  t->exfile = file;
+  file_deny_write (file);
 
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -305,6 +354,8 @@ load (const char *file_name, void (**eip) (void), void **esp)
   if (!setup_stack (esp))
     goto done;
 
+  push_arguments_to_stack (esp, program_name, counter, args);
+
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
 
@@ -312,7 +363,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
   return success;
 }
 
@@ -424,6 +474,87 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   return true;
 }
 
+static bool
+push_arguments_to_stack (void **esp, char *program_name, int argc, char *args[])
+{
+  void *t_esp = *esp;
+  char *addresses[MAX_ARGS];
+  int counter = 0;
+
+  /* push arguments and store the addresses */
+  for (int i = argc-1; i >= 0; i--) {
+    t_esp -= 1;
+    memset (t_esp, (char) 0, 1);
+    size_t sz = strlen (args[i]);
+    t_esp -= sz;
+    memcpy (t_esp, args[i], sz * sizeof (char));
+    addresses[i] = t_esp;
+    counter += (sz + 1);
+  }
+
+  t_esp -= 1;
+  memset (t_esp, (char) 0, 1);
+
+  /* push program name and store its address */
+  size_t sz = strlen (program_name);
+  t_esp = (char *) t_esp - sz;
+  memcpy (t_esp, program_name, sz * sizeof (char));
+  addresses[argc] = t_esp;
+  counter += (sz + 1);
+
+  /* check for required padding and add it */
+  uint8_t pad = (size_t) t_esp % 4;
+  if (pad != 0) {
+    t_esp -= pad;
+    uint8_t zero = 0;
+    for (int i = 0; i < pad; i++) {
+      memcpy (t_esp + i, &zero, 1);
+    }
+    counter += pad;
+  }
+
+  t_esp -= sizeof (char *);
+  memset (t_esp, 0, sizeof (char *));
+  counter += sizeof (char *);
+
+  /* push the argument addresses */
+  for (int i = argc-1; i >= 0; i--) {
+    t_esp -= sizeof (char *);
+    memcpy (t_esp, &addresses[i], sizeof (char *));
+    counter += (sizeof (char *));
+  }
+
+  /* push the addresses of program */
+  t_esp -= sizeof (char *);
+  memcpy (t_esp, &addresses[argc], sizeof (char *));
+  counter += sizeof (char *);
+
+  /* store the address of argv to be pushed */
+  void *argv_add = t_esp;
+  t_esp -= sizeof (char **);
+  memcpy (t_esp, &argv_add, sizeof (char **));
+  counter += sizeof (char **);
+
+  /* push argc */
+  t_esp -= sizeof (int);
+  counter += sizeof (int);
+  argc++;
+  memcpy (t_esp, &argc, sizeof (int));
+
+  /* push fake return address */
+  t_esp -= sizeof (void *);
+  memcpy (t_esp, &argv_add, sizeof (void *));
+  counter += sizeof (void *);
+
+  /* set the stack pointer back to the current address */
+  *esp = t_esp;
+  /* hex dump for debugging */
+  // hex_dump (*esp, *esp, counter, true);
+  // printf("*esp set at: %x, esp: %x, &esp: %x, bytes: %d\n", *esp, esp, &esp, counter);
+  
+  return true;
+}
+
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool
@@ -436,10 +567,11 @@ setup_stack (void **esp)
   if (kpage != NULL) 
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (success)
+      if (success) {
         *esp = PHYS_BASE;
-      else
+      } else {
         palloc_free_page (kpage);
+      }
     }
   return success;
 }

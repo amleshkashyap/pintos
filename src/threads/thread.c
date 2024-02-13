@@ -9,7 +9,6 @@
 #include "threads/intr-stubs.h"
 #include "threads/palloc.h"
 #include "threads/switch.h"
-#include "threads/synch.h"
 #include "threads/vaddr.h"
 #include "devices/timer.h"
 #ifdef USERPROG
@@ -112,7 +111,7 @@ thread_init (void)
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
   ready_threads = 1;
-  printf("First thread: %s, %d\n", initial_thread->name, initial_thread->tid);
+  // printf("First thread: %s, %d\n", initial_thread->name, initial_thread->tid);
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -204,11 +203,24 @@ thread_create (const char *name, int priority,
   /* only after tid is allocated, update the nice values
    * assuming that initial and idle thread are tid 1 and 2 */
   struct thread *cur = thread_current ();
-  if (thread_mlfqs && tid > 2) {
-    t->nice = cur->nice;
-    // thread is yielded at the bottom
-    t->priority = calculate_priority (t->recent_cpu, t->nice);
-    t->actual_priority = t->priority;
+  if (tid > 2) {
+    /* do pid = tid for every thread -> mark as non-user thread though for identification
+     * set the parent_pid for every thread as the current thread. also set initial exit_status */
+    t->user_thread = false;
+    t->pid = t->tid;
+    t->parent_pid = cur->tid;
+    t->exit_status = -2;
+
+    if (thread_mlfqs) {
+      t->nice = cur->nice;
+      // thread is yielded at the bottom
+      t->priority = calculate_priority (t->recent_cpu, t->nice);
+      t->actual_priority = t->priority;
+    }
+
+    sema_init (&t->child_sema, 0);
+    t->open_fds = 0;
+    for (int i = 0; i < MAX_OPEN_FD; i++) t->file_descriptors[i] = NULL;
   }
 
   /* Stack frame for kernel_thread(). */
@@ -286,7 +298,7 @@ donate_priority (struct thread *cur, struct thread *holder, struct lock *l)
   }
 
   ASSERT (cur->donations_made == 0);
-  ASSERT (holder->donations_made <= 7);
+  ASSERT (holder->donations_made <= MAX_PRIORITY_DONATION - 1);
 
   cur->donated_for = l;
   cur->donations_made++;
@@ -330,8 +342,8 @@ priority_schedule (struct thread *cur, struct thread *t)
 {
   enum intr_level old_level;
   old_level = intr_disable ();
-  // printf("cur tid, prio: %d, %d, t tid, prio: %d, %d\n", cur->tid, cur->priority, t->tid, t->priority);
   if (cur->priority < t->priority) {
+    ASSERT (!intr_context ());
     thread_yield ();
   }
   intr_set_level (old_level);
@@ -346,6 +358,7 @@ thread_make_sleep (int64_t new_wakeup_at)
   cur->sleeping = true;
   ready_threads--;
   intr_set_level (old_level);
+  ASSERT (!intr_context ());
   thread_yield ();
 }
 
@@ -381,13 +394,27 @@ get_thread_by_tid (int tid)
 {
   struct list_elem *e;
   struct thread *t;
+  enum intr_level old_level = intr_disable ();
+
   for(e = list_begin (&all_list); e != list_end (&all_list); e = list_next (e)) {
     t = list_entry (e, struct thread, allelem);
     if (t->tid == tid) {
+      intr_set_level (old_level);
       return t;
     }
   }
+
+  intr_set_level (old_level);
   return NULL;
+}
+
+/* fetch a thread from alllist by pid */
+struct thread *
+get_thread_by_pid (pid_t pid)
+{
+  struct thread *t = get_thread_by_tid (pid);
+  if (!is_thread (t) || t->user_thread == false) return NULL;
+  return t;
 }
 
 /* Puts the current thread to sleep.  It will not be scheduled
@@ -493,11 +520,36 @@ thread_exit (void)
      and schedule another process.  That process will destroy us
      when it calls thread_schedule_tail(). */
   intr_disable ();
-  list_remove (&thread_current()->allelem);
-  thread_current ()->status = THREAD_DYING;
+  struct thread *cur = thread_current ();
+  list_remove (&cur->allelem);
+
+  if (cur->user_thread) {
+    if (cur->exit_status == -2) cur->exit_status = -1;
+    printf("%s: exit(%d)\n", cur->name, cur->exit_status);
+
+    update_exit_status_for_parent ();
+  }
+
+  file_close (cur->exfile);
+  cur->status = THREAD_DYING;
   ready_threads--;
   schedule ();
   NOT_REACHED ();
+}
+
+void
+update_exit_status_for_parent (void)
+{
+  struct thread *cur = thread_current ();
+  struct thread *parent = get_thread_by_pid (cur->parent_pid);
+  if (is_thread (parent)) {
+    for (int i = 0; i < parent->child_threads; i++) {
+      if (parent->t_children[i].pid == cur->pid) {
+        parent->t_children[i].exit_status = cur->exit_status;
+        break;
+      }
+    }
+  }
 }
 
 uint64_t
@@ -588,6 +640,7 @@ thread_set_priority (int new_priority)
   intr_set_level (old_level);
   // yield the thread, method disables the interrupt - should this be inside the above block?
   if (yield == true) {
+    ASSERT (!intr_context ());
     thread_yield ();
   }
 }
@@ -669,6 +722,7 @@ thread_set_nice (int new_nice)
   cur->priority = calculate_priority (cur->recent_cpu, cur->nice);
   intr_set_level (old_level);
   if (cur->priority < old_priority) {
+    ASSERT (!intr_context ());
     thread_yield ();
   }
 }
@@ -726,6 +780,40 @@ void
 thread_set_recent_cpu (struct thread *t)
 {
   t->recent_cpu = calculate_recent_cpu (t->recent_cpu, load_average, t->nice);
+}
+
+/* this method finds if pid is child of t, and gets its index if found
+ * removes it from the list of exited processes and reduces child thread count
+ * since a process thread is single, no locking should be required */
+int
+fetch_child_exit_status (pid_t pid)
+{
+  enum intr_level old_level = intr_disable ();
+  struct thread *cur = thread_current ();
+  if (cur->child_threads < 1) {
+    intr_set_level (old_level);
+    return -1;
+  }
+
+  for (int i = 0; i < cur->child_threads; i++) {
+    if (cur->t_children[i].pid == pid) {
+      int exit_status = cur->t_children[i].exit_status;
+      if (exit_status != -2) {
+        if (cur->child_threads == 1) {
+          cur->t_children[i].pid = 0;
+          cur->t_children[i].exit_status = -2;
+        } else {
+          cur->t_children[i].pid = cur->t_children[cur->child_threads-1].pid;
+          cur->t_children[i].exit_status = cur->t_children[cur->child_threads-1].exit_status;
+        }
+        cur->child_threads--;
+      }
+      intr_set_level (old_level);
+      return exit_status;
+    }
+  }
+  intr_set_level (old_level);
+  return -1;
 }
 
 int
@@ -825,6 +913,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->magic = THREAD_MAGIC;
   t->wakeup_at = 0;
   t->sleeping = false;
+  t->child_threads = 0;
 
   if (!thread_mlfqs) {
     t->priority = priority;
@@ -1011,7 +1100,6 @@ void
 thread_schedule_tail (struct thread *prev)
 {
   struct thread *cur = running_thread ();
-  // printf("  thread_schedule_tail: current: %d, previous: %d\n", cur->tid, prev->tid);
   
   ASSERT (intr_get_level () == INTR_OFF);
 
@@ -1086,6 +1174,53 @@ allocate_tid (void)
 
   return tid;
 }
+
+int
+allocate_fd (void)
+{
+  struct thread *cur = thread_current ();
+  if (cur->open_fds == MAX_OPEN_FD) return -1;
+
+  int fd = -1;
+  for (int i = 0; i < MAX_OPEN_FD; i++) {
+    if (cur->file_descriptors[i] == NULL) {
+      fd = i + INITIAL_FD;
+      cur->open_fds++;
+      break;
+    }
+  }
+
+  return fd;
+}
+
+void
+free_fd (int fd)
+{
+  thread_current ()->file_descriptors[fd-INITIAL_FD] = NULL;
+  thread_current ()->open_fds--;
+}
+
+/* checks if the given fd is held by the running thread, and other basic validations. 0/1 is valid for all */
+bool
+is_valid_fd (int fd)
+{
+  if (fd >= 0 && fd < INITIAL_FD) return true;
+  if (fd < 0 || fd > MAX_OPEN_FD + INITIAL_FD || thread_current ()->file_descriptors[fd-INITIAL_FD] == NULL) return false;
+  return true;
+}
+
+struct file *
+get_file (int fd)
+{
+  return thread_current ()->file_descriptors[fd-INITIAL_FD];
+}
+
+void
+set_file (int fd, struct file *t_file)
+{
+  thread_current ()->file_descriptors[fd-INITIAL_FD] = t_file;
+}
+
 
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */

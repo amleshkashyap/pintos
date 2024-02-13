@@ -71,6 +71,7 @@ halt (void)
 void
 exit (int status)
 {
+  // printf("Exited with status: %d\n", status);
   syscall1 (SYS_EXIT, status);
   NOT_REACHED ();
 }
@@ -120,6 +121,7 @@ read (int fd, void *buffer, unsigned size)
 int
 write (int fd, const void *buffer, unsigned size)
 {
+  // printf("Writing\n");
   return syscall3 (SYS_WRITE, fd, buffer, size);
 }
 

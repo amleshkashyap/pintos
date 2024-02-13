@@ -514,6 +514,7 @@ interrupt_handler (struct intr_frame *f)
         if (c->expecting_interrupt) 
           {
             inb (reg_status (c));               /* Acknowledge interrupt. */
+            // sema_up called from an interrupt
             sema_up (&c->completion_wait);      /* Wake up waiter. */
           }
         else

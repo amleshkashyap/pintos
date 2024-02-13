@@ -47,7 +47,7 @@ GETCMD += 2> $(TEST)-persistence.errors $(if $(VERBOSE),|tee,>) $(TEST)-persiste
 
 tests/filesys/extended/%.output: kernel.bin
 	rm -f tmp.dsk
-	pintos-mkdisk tmp.dsk --filesys-size=2
+	pintos-mkdisk tmp.dsk --filesys-size=4
 	$(TESTCMD)
 	$(GETCMD)
 	rm -f tmp.dsk

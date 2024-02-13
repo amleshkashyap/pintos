@@ -132,10 +132,15 @@ sema_up (struct semaphore *sema)
   }
 
   sema->value++;
-  if (max_priority > thread_current ()->priority) {
-    thread_yield ();
-  }
   intr_set_level (old_level);
+  // TODO: If sema_up is called within an interrupt, then thread shouldn't be yielded immediately
+  if (max_priority > thread_current ()->priority) {
+    if (intr_context ()) {
+      intr_yield_on_return ();
+    } else {
+      thread_yield ();
+    }
+  }
 }
 
 static void sema_test_helper (void *sema_);

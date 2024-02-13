@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/fixed-point.h"
+#include "threads/synch.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -18,7 +19,20 @@ enum thread_status
 /* Thread identifier type.
    You can redefine this to whatever type you like. */
 typedef int tid_t;
+typedef int pid_t;
 #define TID_ERROR ((tid_t) -1)          /* Error value for tid_t. */
+
+#define TNAME_MAX 32
+#define MAX_CHILDREN 10
+#define MAX_PRIORITY_DONATION 8
+#define MAX_OPEN_FD 10
+#define INITIAL_FD 2                   /* 0 and 1 are reserved values for stdin/stdout */
+
+/* TODO: this is not handled cleanly, eg, for exec, child doesn't set this before doing a sema_up */
+struct children {
+  pid_t pid;
+  int exit_status;
+};
 
 /* A kernel thread or user process.
 
@@ -81,7 +95,7 @@ struct thread
     /* Owned by thread.c. */
     tid_t tid;                          /* Thread identifier. */
     enum thread_status status;          /* Thread state. */
-    char name[16];                      /* Name (for debugging purposes). */
+    char name[TNAME_MAX];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
     struct list_elem allelem;           /* List element for all threads list. */
@@ -103,8 +117,8 @@ struct thread
 
     /* for priority donation */
     int actual_priority;
-    int donated_priority[8];
-    tid_t donated_to[8];
+    int donated_priority[MAX_PRIORITY_DONATION];
+    tid_t donated_to[MAX_PRIORITY_DONATION];
     struct lock *donated_for;
     int donations_made;
     int donations_held;
@@ -112,6 +126,26 @@ struct thread
     /* for mlfqs */
     int nice;
     fxpoint recent_cpu;
+
+    /* user programs */
+    bool user_thread;
+    pid_t pid;
+    pid_t parent_pid;
+    int exit_status;
+
+    /* for quick retrieval */
+    int child_threads;
+    struct children t_children[MAX_CHILDREN];
+
+    /* stores struct file which is opened during load, closed in thread_exit () */
+    struct file *exfile;
+
+    /* fds are per process */
+    struct file* file_descriptors[MAX_OPEN_FD];
+    int open_fds;
+
+    /* parent does a sema_down and waits for exec'd child to complete load and do a sema_up */
+    struct semaphore child_sema;
   };
 
 /* If false (default), use round-robin scheduler.
@@ -139,9 +173,12 @@ void print_all_priorities (void);
 void thread_make_sleep (int64_t);
 void thread_wakeup (struct thread *);
 
+void clean_orphan_threads (void);
+
 /* utility */
 uint64_t total_ticks (void);
 struct thread * get_thread_by_tid (int);
+struct thread * get_thread_by_pid (pid_t);
 
 void thread_block (void);
 void thread_unblock (struct thread *);
@@ -172,5 +209,16 @@ void thread_recent_cpu_tick (void);
 void thread_update_all_recent_cpu (void);
 
 int all_ready_threads (void);
+
+/* for syscalls */
+int fetch_child_exit_status (pid_t);
+void update_exit_status_for_parent (void);
+
+/* for file syscalls */
+bool is_valid_fd (int);
+int allocate_fd (void);
+void free_fd (int);
+struct file * get_file (int);
+void set_file (int, struct file*);
 
 #endif /* threads/thread.h */
