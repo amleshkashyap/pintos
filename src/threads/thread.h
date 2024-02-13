@@ -25,9 +25,10 @@ typedef int pid_t;
 #define TNAME_MAX 32
 #define MAX_CHILDREN 20
 #define MAX_PRIORITY_DONATION 8
-#define MAX_OPEN_FD 10
-#define INITIAL_FD 2
+#define MAX_OPEN_FD 10                 /* TODO: a larger value leads to system slowdown due to the fd close operation */
+#define INITIAL_FD 2                   /* 0 and 1 are reserved values for stdin/stdout */
 
+/* TODO: this is not handled cleanly, eg, for exec, child doesn't set this before doing a sema_up */
 struct children {
   pid_t pid;
   int exit_status;
@@ -141,10 +142,13 @@ struct thread
     int child_threads;
     struct children t_children[MAX_CHILDREN];
 
+    /* stores struct file which is opened during load, closed in thread_exit () */
     struct file *exfile;
+
+    /* per process fd count is irrelevant currently */
     int open_fds;
 
-    /* exec synch */
+    /* parent does a sema_down and waits for exec'd child to complete load and do a sema_up */
     struct semaphore child_sema;
   };
 

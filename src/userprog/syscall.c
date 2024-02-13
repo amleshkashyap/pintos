@@ -11,11 +11,11 @@ static void syscall_handler (struct intr_frame *);
 static bool
 is_valid_addr (uint32_t *pd, const void *vaddr, size_t size)
 {
-  uint32_t *pde;
   const void *vaddr2 = vaddr + size;
 
   if (pd == NULL || !is_user_vaddr (vaddr) || !is_user_vaddr (vaddr2)) return false;
 
+  /* get the page for start/end addresses to verify */
   if (pagedir_get_page (pd, vaddr) == NULL) return false;
   if (pagedir_get_page (pd, vaddr2) == NULL) return false;
   return true;
@@ -56,18 +56,14 @@ syscall_handler (struct intr_frame *f)
   switch (syscall_num) {
     case SYS_OPEN:
       {
-        // printf("Syscall open: %d\n", cur->tid);
         const char *file = (const char *) get_referenced_argument (cur->pagedir, esp, 1);
         int fd = open (file);
-        // printf("Opened file: %s, tname: %s, tid: %d, fd: %d\n", file, cur->name, cur->tid, fd);
-        ASSERT (fd >= INITIAL_FD || fd == -1);
         f->eax = fd;
         return;
       }
     case SYS_READ:
       {
         int fd = get_argument (cur->pagedir, esp, 1, sizeof (int));
-        // printf("process: %d, name: %s, reading fd: %d\n", cur->pid, cur->name, fd);
         if (fd == 1 || !is_valid_fd (fd)) {
           f->eax = 0;
           return;
@@ -127,7 +123,6 @@ syscall_handler (struct intr_frame *f)
     case SYS_REMOVE:
       {
         const char *file = (const char *) get_referenced_argument (cur->pagedir, esp, 1);
-        // printf(" --- Removing file: %s, tname: %s, tid: %d\n", file, cur->name, cur->tid);
         f->eax = remove (file);
         return;
       }
@@ -185,13 +180,14 @@ open (const char *file)
 int
 read (int fd, void *buffer, unsigned size)
 {
+  /* TODO: where to read from when fd = 0 */
   return file_read (get_file (fd), buffer, size);
 }
 
 int
 write (int fd, const void *buffer, unsigned size)
 {
-  // printf("Called write: fd - %d, size: %d, buffer: %s\n", fd, size, buffer);
+  /* break down large buffers is not handled */
   if (fd == 1) {
     putbuf (buffer, size);
   } else {
@@ -209,12 +205,12 @@ close (int fd)
 void
 exit (int status)
 {
-  // printf("%s: exit syscall(%d)\n", thread_current ()->name, status);
   thread_current ()->exit_status = status;
   thread_exit ();
   NOT_REACHED ();
 }
 
+/* checks for exit status of child to be a non-initial value before exiting */
 int
 wait (pid_t pid)
 {
@@ -248,12 +244,10 @@ pid_t
 exec (const char *cmdline)
 {
   struct thread *cur = thread_current ();
-  // printf("Trying to execute cmdline: %s, cur thread: %s-%d, cur children: %d\n", cmdline, cur->name, cur->tid, cur->child_threads);
   if (cur->child_threads == MAX_CHILDREN) return -1;
 
   tid_t tid = process_execute (cmdline);
   if (tid != TID_ERROR) {
-    // printf("About to down the sema, cmdline: %s, tname: %s, sema: %d\n", cmdline, cur->name, cur->child_sema.value);
     sema_down (&cur->child_sema);
     struct thread *child = get_thread_by_pid (tid);
     if (child != NULL && child->exit_status == -2) return child->pid;

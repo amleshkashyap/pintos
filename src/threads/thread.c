@@ -119,7 +119,7 @@ thread_init (void)
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
   ready_threads = 1;
-  printf("First thread: %s, %d\n", initial_thread->name, initial_thread->tid);
+  // printf("First thread: %s, %d\n", initial_thread->name, initial_thread->tid);
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -349,7 +349,6 @@ priority_schedule (struct thread *cur, struct thread *t)
 {
   enum intr_level old_level;
   old_level = intr_disable ();
-  // printf("cur tid, prio: %d, %d, t tid, prio: %d, %d\n", cur->tid, cur->priority, t->tid, t->priority);
   if (cur->priority < t->priority) {
     ASSERT (!intr_context ());
     thread_yield ();
@@ -1103,7 +1102,6 @@ void
 thread_schedule_tail (struct thread *prev)
 {
   struct thread *cur = running_thread ();
-  // printf("  thread_schedule_tail: current: %d, previous: %d\n", cur->tid, prev->tid);
   
   ASSERT (intr_get_level () == INTR_OFF);
 
@@ -1179,7 +1177,7 @@ allocate_tid (void)
   return tid;
 }
 
-/* returns the first available fd for a requesting thread */
+/* returns the first available fd for a requesting thread, must be done within a lock */
 int
 allocate_fd (void)
 {
@@ -1201,6 +1199,7 @@ allocate_fd (void)
   return fd;
 }
 
+/* TODO: this may need to acquire a lock as the first 2 operations should be atomic */
 void
 free_fd (int fd)
 {
@@ -1209,6 +1208,7 @@ free_fd (int fd)
   thread_current ()->open_fds--;
 }
 
+/* checks if the given fd is held by the running thread, and other basic validations. 0/1 is valid for all */
 bool
 is_valid_fd (int fd)
 {
@@ -1225,12 +1225,14 @@ get_file (int fd)
   return file_descriptors[fd-INITIAL_FD].t_file;
 }
 
+/* if fd allocation has succeeded, file can be opened from filesystem - map the opened file with fd */
 void
 set_file (int fd, struct file *t_file)
 {
   file_descriptors[fd-INITIAL_FD].t_file = t_file;
 }
 
+/* when a user process is exiting, it must close its fds */
 static void
 close_open_fds (void)
 {
