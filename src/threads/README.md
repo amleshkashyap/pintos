@@ -173,7 +173,7 @@
     - Counting threads -
       - increase when new thread is added to ready list, or woken up from sleep
       - reduce when a thread is blocked, made to sleep or when completed
-      - never count second thread
+      - never count second thread (ie, idle thread)
 
   * Priority Donation
     - While Acquiring Lock -> check the priority of holder -> if lower, increase its priority -> if it has donated to threads, increase the
@@ -183,3 +183,7 @@
     - After Releasing Lock -> check if there are waiting threads -> if yes, unblock the highest priority thread -> if that thread has made
       donations, then put it at the front of the ready list.
     - There's no actual recursive method for nested priority donation.
+
+## Synchronization
+  * No new synchronization primitives are added - most methods (eg, scheduling related) require interrupts to be disabled.
+  * When a process releases a lock, it should yield the cpu if it had received priority donation.
