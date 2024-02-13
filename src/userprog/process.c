@@ -72,7 +72,11 @@ start_process (void *file_name_)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
-  if (!success) thread_current ()->exit_status = -1;
+
+  if (!success) {
+    thread_current ()->exit_status = -1;
+    update_exit_status_for_parent ();
+  }
 
   /* If load failed, quit. */
   palloc_free_page (file_name);

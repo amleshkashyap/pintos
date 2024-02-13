@@ -15,7 +15,9 @@ is_valid_addr (uint32_t *pd, const void *vaddr, size_t size)
 
   if (pd == NULL || !is_user_vaddr (vaddr) || !is_user_vaddr (vaddr2)) return false;
 
-  /* get the page for start/end addresses to verify */
+  /* get the page for start/end addresses to verify
+   * note that arguments are allowed to cross page boundaries and those checks will fail tests
+   * ex. sc-boundary-2, sc-boundary-3, exec-bound-2, exec-bound-3 */
   if (pagedir_get_page (pd, vaddr) == NULL) return false;
   if (pagedir_get_page (pd, vaddr2) == NULL) return false;
   return true;
