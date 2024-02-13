@@ -95,6 +95,7 @@
   * FDs are kept to max of 10 per process - in multi-oom, upto 126 fds are attempted for allocation.
   * FD management methods are added in threads directory, but they maybe somewhere else too.
   * A process can't exec more than 10 children, even though they've died -> it must wait for them if it wants to clean such children.
+  * Memory validity checks and handling of corresponding page fault/exception should be done using the second way.
 
 ## Program Startup
   * 80x86 Calling Convention
