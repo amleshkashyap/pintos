@@ -23,9 +23,9 @@ typedef int pid_t;
 #define TID_ERROR ((tid_t) -1)          /* Error value for tid_t. */
 
 #define TNAME_MAX 32
-#define MAX_CHILDREN 30
+#define MAX_CHILDREN 20
 #define MAX_PRIORITY_DONATION 8
-#define MAX_OPEN_FD 1000
+#define MAX_OPEN_FD 10
 #define INITIAL_FD 2
 
 struct children {
@@ -142,6 +142,7 @@ struct thread
     struct children t_children[MAX_CHILDREN];
 
     struct file *exfile;
+    int open_fds;
 
     /* exec synch */
     struct semaphore child_sema;
