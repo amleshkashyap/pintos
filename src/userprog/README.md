@@ -82,6 +82,14 @@
       now though, a child thread changes the data of its parent thread (parent reads the data of child thread).
     - Once the boundaries are checked, there's no other protective mechanisms.
 
+## Synchronization
+  * A fd lock is used to allocate a new file descriptor - it's not used when freeing the fd though.
+  * A semaphore is present for every thread which waits for exec'd child to finish loading.
+  * In process\_wait, an infinite for loop runs and waits for a given tid to return a NULL value, meaning the thread is removed from the
+    system (ie, killed), hence the executor can stop waiting - needs to be fixed to be same as wait (as it has to return exit status) - for
+    now though, it's only used by kernel thread and hence works fine.
+  * wait syscall is similar, but it exits once the child's exit\_status becomes different from -2 (the initial value).
+
 ## Concerns
   * Certain tests don't work with 2MB filesys hence its changed to 4MB by default.
   * Filesys open method fails to load an existing program - dir\_close is commented for it to work.
