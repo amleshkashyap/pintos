@@ -34,10 +34,6 @@ static struct thread *idle_thread;
 /* Initial thread, the thread running init.c:main(). */
 static struct thread *initial_thread;
 
-static struct file_desc file_descriptors[MAX_OPEN_FD];
-static struct lock fd_lock;
-static int open_fds = 0;
-
 /* Lock used by allocate_tid(). */
 static struct lock tid_lock;
 
@@ -80,7 +76,6 @@ static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
-static void close_open_fds (void);
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -101,7 +96,6 @@ thread_init (void)
   ASSERT (intr_get_level () == INTR_OFF);
 
   lock_init (&tid_lock);
-  lock_init (&fd_lock);
   list_init (&ready_list);
   list_init (&all_list);
 
@@ -110,8 +104,6 @@ thread_init (void)
       list_init (&multilevel_lists[i]);
     }
   }
-
-  for (int i = 0; i < MAX_OPEN_FD; i++) file_descriptors[i].t_file = NULL;
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -206,7 +198,7 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
-  // printf("Thread with name, tid, priority %s, %d, %d, open_fds: %d\n", t->name, tid, t->priority, open_fds);
+  // printf("Thread with name, tid, priority %s, %d, %d\n", t->name, tid, t->priority);
 
   /* only after tid is allocated, update the nice values
    * assuming that initial and idle thread are tid 1 and 2 */
@@ -228,6 +220,7 @@ thread_create (const char *name, int priority,
 
     sema_init (&t->child_sema, 0);
     t->open_fds = 0;
+    for (int i = 0; i < MAX_OPEN_FD; i++) t->file_descriptors[i] = NULL;
   }
 
   /* Stack frame for kernel_thread(). */
@@ -534,17 +527,7 @@ thread_exit (void)
     if (cur->exit_status == -2) cur->exit_status = -1;
     printf("%s: exit(%d)\n", cur->name, cur->exit_status);
 
-    close_open_fds ();
-
-    struct thread *parent = get_thread_by_pid (cur->parent_pid);
-    if (is_thread (parent)) {
-      for (int i = 0; i < parent->child_threads; i++) {
-        if (parent->t_children[i].pid == cur->pid) {
-          parent->t_children[i].exit_status = cur->exit_status;
-          break;
-        }
-      }
-    }
+    update_exit_status_for_parent ();
   }
 
   file_close (cur->exfile);
@@ -552,6 +535,21 @@ thread_exit (void)
   ready_threads--;
   schedule ();
   NOT_REACHED ();
+}
+
+void
+update_exit_status_for_parent (void)
+{
+  struct thread *cur = thread_current ();
+  struct thread *parent = get_thread_by_pid (cur->parent_pid);
+  if (is_thread (parent)) {
+    for (int i = 0; i < parent->child_threads; i++) {
+      if (parent->t_children[i].pid == cur->pid) {
+        parent->t_children[i].exit_status = cur->exit_status;
+        break;
+      }
+    }
+  }
 }
 
 uint64_t
@@ -1177,34 +1175,28 @@ allocate_tid (void)
   return tid;
 }
 
-/* returns the first available fd for a requesting thread, must be done within a lock */
 int
 allocate_fd (void)
 {
-  if (open_fds == MAX_OPEN_FD) return -1;
-  int fd = -1;
   struct thread *cur = thread_current ();
-  lock_acquire (&fd_lock);
+  if (cur->open_fds == MAX_OPEN_FD) return -1;
+
+  int fd = -1;
   for (int i = 0; i < MAX_OPEN_FD; i++) {
-    if (file_descriptors[i].pid == 0) {
-      file_descriptors[i].pid = cur->pid;
+    if (cur->file_descriptors[i] == NULL) {
       fd = i + INITIAL_FD;
-      open_fds++;
       cur->open_fds++;
       break;
     }
   }
 
-  lock_release (&fd_lock);
   return fd;
 }
 
-/* TODO: this may need to acquire a lock as the first 2 operations should be atomic */
 void
 free_fd (int fd)
 {
-  file_descriptors[fd-INITIAL_FD].pid = 0;
-  open_fds--;
+  thread_current ()->file_descriptors[fd-INITIAL_FD] = NULL;
   thread_current ()->open_fds--;
 }
 
@@ -1213,40 +1205,22 @@ bool
 is_valid_fd (int fd)
 {
   if (fd >= 0 && fd < INITIAL_FD) return true;
-  if (fd < 0 || fd > MAX_OPEN_FD + INITIAL_FD || file_descriptors[fd-INITIAL_FD].t_file == NULL ||
-                                                 file_descriptors[fd-INITIAL_FD].pid != thread_current ()->pid)
-    return false;
+  if (fd < 0 || fd > MAX_OPEN_FD + INITIAL_FD || thread_current ()->file_descriptors[fd-INITIAL_FD] == NULL) return false;
   return true;
 }
 
 struct file *
 get_file (int fd)
 {
-  return file_descriptors[fd-INITIAL_FD].t_file;
+  return thread_current ()->file_descriptors[fd-INITIAL_FD];
 }
 
-/* if fd allocation has succeeded, file can be opened from filesystem - map the opened file with fd */
 void
 set_file (int fd, struct file *t_file)
 {
-  file_descriptors[fd-INITIAL_FD].t_file = t_file;
+  thread_current ()->file_descriptors[fd-INITIAL_FD] = t_file;
 }
 
-/* when a user process is exiting, it must close its fds */
-static void
-close_open_fds (void)
-{
-  struct thread *cur = thread_current ();
-  if (cur->open_fds == 0) return;
-  pid_t pid = cur->pid;
-  for (int i = 0; i < MAX_OPEN_FD; i++) {
-    if (file_descriptors[i].pid == pid) {
-      file_descriptors[i].pid = 0;
-      open_fds--;
-      cur->open_fds--;
-    }
-  }
-}
 
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */

@@ -23,20 +23,15 @@ typedef int pid_t;
 #define TID_ERROR ((tid_t) -1)          /* Error value for tid_t. */
 
 #define TNAME_MAX 32
-#define MAX_CHILDREN 20
+#define MAX_CHILDREN 10
 #define MAX_PRIORITY_DONATION 8
-#define MAX_OPEN_FD 10                 /* TODO: a larger value leads to system slowdown due to the fd close operation */
+#define MAX_OPEN_FD 10
 #define INITIAL_FD 2                   /* 0 and 1 are reserved values for stdin/stdout */
 
 /* TODO: this is not handled cleanly, eg, for exec, child doesn't set this before doing a sema_up */
 struct children {
   pid_t pid;
   int exit_status;
-};
-
-struct file_desc {
-  pid_t pid;
-  struct file *t_file;
 };
 
 /* A kernel thread or user process.
@@ -145,7 +140,8 @@ struct thread
     /* stores struct file which is opened during load, closed in thread_exit () */
     struct file *exfile;
 
-    /* per process fd count is irrelevant currently */
+    /* fds are per process */
+    struct file* file_descriptors[MAX_OPEN_FD];
     int open_fds;
 
     /* parent does a sema_down and waits for exec'd child to complete load and do a sema_up */
@@ -216,6 +212,7 @@ int all_ready_threads (void);
 
 /* for syscalls */
 int fetch_child_exit_status (pid_t);
+void update_exit_status_for_parent (void);
 
 /* for file syscalls */
 bool is_valid_fd (int);
