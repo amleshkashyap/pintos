@@ -39,9 +39,12 @@ pagedir_destroy (uint32_t *pd)
         uint32_t *pt = pde_get_pt (*pde);
         uint32_t *pte;
         
-        for (pte = pt; pte < pt + PGSIZE / sizeof *pte; pte++)
-          if (*pte & PTE_P) 
+        for (pte = pt; pte < pt + PGSIZE / sizeof *pte; pte++) {
+          if (*pte & PTE_P) {
+            clear_frame (pte_get_page (*pte));
             palloc_free_page (pte_get_page (*pte));
+          }
+        }
         palloc_free_page (pt);
       }
   palloc_free_page (pd);
@@ -108,14 +111,16 @@ pagedir_set_page (uint32_t *pd, void *upage, void *kpage, bool writable)
 
   pte = lookup_page (pd, upage, true);
 
-  if (pte != NULL) 
-    {
-      ASSERT ((*pte & PTE_P) == 0);
-      *pte = pte_create_user (kpage, writable);
-      return true;
-    }
-  else
+  if (pte != NULL) {
+    ASSERT ((*pte & PTE_P) == 0);
+    *pte = pte_create_user (kpage, writable);
+    /* get a frame mapping the kernel address to pte, and set it in the relevant slot
+     * NOTE: if no user pages are available, method returns false as of now, no page fault */
+    map_frame (pte_get_page (*pte), pte);
+    return true;
+  } else {
     return false;
+  }
 }
 
 /* Looks up the physical address that corresponds to user virtual
@@ -130,10 +135,13 @@ pagedir_get_page (uint32_t *pd, const void *uaddr)
   ASSERT (is_user_vaddr (uaddr));
   
   pte = lookup_page (pd, uaddr, false);
-  if (pte != NULL && (*pte & PTE_P) != 0)
+
+  /* no change required in PTE entry for frame table */
+  if (pte != NULL && (*pte & PTE_P) != 0) {
     return pte_get_page (*pte) + pg_ofs (uaddr);
-  else
-    return NULL;
+  }
+
+  return NULL;
 }
 
 /* Marks user virtual page UPAGE "not present" in page
@@ -149,11 +157,11 @@ pagedir_clear_page (uint32_t *pd, void *upage)
   ASSERT (is_user_vaddr (upage));
 
   pte = lookup_page (pd, upage, false);
-  if (pte != NULL && (*pte & PTE_P) != 0)
-    {
-      *pte &= ~PTE_P;
-      invalidate_pagedir (pd);
-    }
+  if (pte != NULL && (*pte & PTE_P) != 0) {
+    clear_frame (pte_get_page (*pte));
+    *pte &= ~PTE_P;
+    invalidate_pagedir (pd);
+  }
 }
 
 /* Returns true if the PTE for virtual page VPAGE in PD is dirty,

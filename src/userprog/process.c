@@ -17,6 +17,7 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "vm/page.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
@@ -245,8 +246,8 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
   char *t_args, *token;
   /* separate out program name first */
-  strtok_r (file_name, " ", &t_args);
-  char *program_name = file_name;
+  strtok_r ((char *) file_name, " ", &t_args);
+  char *program_name = (char *) file_name;
 
   /* overwrite thread_name with user program name for printing at thread_exit (). Also, mark as user thread. */
   strlcpy (t->name, program_name, TNAME_MAX);
@@ -447,14 +448,16 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
       /* Get a page of memory. */
-      uint8_t *kpage = palloc_get_page (PAL_USER);
-      if (kpage == NULL)
+      uint8_t *kpage = get_user_page (false);
+      if (kpage == NULL) {
+        /* if page handler didn't get a page after a few tries, fail */
         return false;
+      }
 
       /* Load this page. */
       if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
         {
-          palloc_free_page (kpage);
+          free_user_page (kpage);
           return false; 
         }
       memset (kpage + page_read_bytes, 0, page_zero_bytes);
@@ -462,7 +465,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       /* Add the page to the process's address space. */
       if (!install_page (upage, kpage, writable)) 
         {
-          palloc_free_page (kpage);
+          free_user_page (kpage);
           return false; 
         }
 
@@ -563,14 +566,14 @@ setup_stack (void **esp)
   uint8_t *kpage;
   bool success = false;
 
-  kpage = palloc_get_page (PAL_USER | PAL_ZERO);
+  kpage = get_user_page (true);
   if (kpage != NULL) 
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success) {
         *esp = PHYS_BASE;
       } else {
-        palloc_free_page (kpage);
+        free_user_page (kpage);
       }
     }
   return success;
