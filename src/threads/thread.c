@@ -1221,6 +1221,68 @@ set_file (int fd, struct file *t_file)
   thread_current ()->file_descriptors[fd-INITIAL_FD] = t_file;
 }
 
+bool
+is_overlapping_vaddr (uint32_t *vaddr)
+{
+  struct thread *cur = thread_current ();
+  if (cur->active_vaddr_maps > 0) {
+    struct vaddr_map *vmap;
+    for (int i = 0; i < MAX_VADDR_MAPS; i++) {
+      if (cur->vaddr_mappings[i] != NULL) {
+        vmap = cur->vaddr_mappings[i];
+        if (vaddr > vmap->svaddr && vaddr < vmap->evaddr) return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool
+is_mappable_vaddr (uint32_t *vaddr)
+{
+  // if (vaddr % PGSIZE != 0) return false;            /* not aligned at page boundary */
+  if (vaddr < PHYS_BASE - PGSIZE) return false;     /* trying to overwrite first stack page */
+  if (is_overlapping_vaddr (vaddr)) return false;   /* any overlaps with other mappings, stack pages or load time pages */
+  return true;
+}
+
+mapid_t
+allocate_vaddr_mapid (void)
+{
+  struct thread *cur = thread_current ();
+  if (cur->active_vaddr_maps == MAX_VADDR_MAPS) return -1;
+
+  for (int i = 0; i < MAX_VADDR_MAPS; i++) {
+    if (cur->vaddr_mappings[i] == NULL) {
+      cur->active_vaddr_maps++;
+      return i;
+    } 
+  }
+
+  return -1;
+}
+
+void
+free_vaddr_map (mapid_t mapid)
+{
+  struct thread *cur = thread_current ();
+  struct vaddr_map *vmap = cur->vaddr_mappings[mapid];
+  cur->vaddr_mappings[mapid] = NULL;
+  cur->active_vaddr_maps--;
+  free (vmap);
+}
+
+void
+set_vaddr_map (mapid_t mapid, enum vaddr_map_type mtype, uint32_t *vaddr, int pages, int fd)
+{
+  struct vaddr_map vmap;
+  vmap.mtype = mtype;
+  vmap.svaddr = vaddr;
+  vmap.evaddr = vaddr + pages * PGSIZE;
+  vmap.fd = fd;
+  thread_current ()->vaddr_mappings[mapid] = &vmap;
+}
+
 
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */

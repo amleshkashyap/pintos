@@ -123,6 +123,20 @@ pagedir_set_page (uint32_t *pd, void *upage, void *kpage, bool writable)
   }
 }
 
+bool
+page_is_valid (uint32_t *pte)
+{
+  return pte != NULL && (*pte & PTE_P) != 0;
+}
+
+uint32_t *
+pagedir_get_pte (uint32_t *pd, const void *uaddr)
+{
+  uint32_t *pte;
+  ASSERT (is_user_vaddr (uaddr));
+  return lookup_page (pd, uaddr, false);
+}
+
 /* Looks up the physical address that corresponds to user virtual
    address UADDR in PD.  Returns the kernel virtual address
    corresponding to that physical address, or a null pointer if
@@ -130,15 +144,14 @@ pagedir_set_page (uint32_t *pd, void *upage, void *kpage, bool writable)
 void *
 pagedir_get_page (uint32_t *pd, const void *uaddr) 
 {
-  uint32_t *pte;
+  // printf("Trying to get page: %p\n", uaddr);
+  uint32_t *pte = pagedir_get_pte (pd, uaddr);
 
-  ASSERT (is_user_vaddr (uaddr));
-  
-  pte = lookup_page (pd, uaddr, false);
-
-  /* no change required in PTE entry for frame table */
-  if (pte != NULL && (*pte & PTE_P) != 0) {
+  /* a valid page will always be in memory - eviction for swap marks page as invalid */
+  if (page_is_valid (pte)) {
     return pte_get_page (*pte) + pg_ofs (uaddr);
+  } else {
+    /* this is for the page fault handler */
   }
 
   return NULL;
@@ -151,6 +164,7 @@ pagedir_get_page (uint32_t *pd, const void *uaddr)
 void
 pagedir_clear_page (uint32_t *pd, void *upage) 
 {
+  printf("Clearing page with address: %p\n", upage);
   uint32_t *pte;
 
   ASSERT (pg_ofs (upage) == 0);
@@ -172,7 +186,7 @@ bool
 pagedir_is_dirty (uint32_t *pd, const void *vpage) 
 {
   uint32_t *pte = lookup_page (pd, vpage, false);
-  return pte != NULL && (*pte & PTE_D) != 0;
+  return pte_is_dirty (pte);
 }
 
 /* Set the dirty bit to DIRTY in the PTE for virtual page VPAGE
@@ -201,7 +215,7 @@ bool
 pagedir_is_accessed (uint32_t *pd, const void *vpage) 
 {
   uint32_t *pte = lookup_page (pd, vpage, false);
-  return pte != NULL && (*pte & PTE_A) != 0;
+  return pte_is_accessed (pte);
 }
 
 /* Sets the accessed bit to ACCESSED in the PTE for virtual page

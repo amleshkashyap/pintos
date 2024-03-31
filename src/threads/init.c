@@ -38,6 +38,8 @@
 #include "filesys/fsutil.h"
 #endif
 #include "vm/frame.h"
+#include "vm/page.h"
+#include "vm/swap.h"
 
 /* Page directory with kernel mappings only. */
 uint32_t *init_page_dir;
@@ -99,7 +101,6 @@ main (void)
   palloc_init (user_page_limit);
   malloc_init ();
   paging_init ();
-  init_frame_table ();
 
   /* Segmentation. */
 #ifdef USERPROG
@@ -129,6 +130,8 @@ main (void)
   filesys_init (format_filesys);
 #endif
 
+  init_frame_table ();
+  init_swap_table ();
   printf ("Boot complete.\n");
   
   /* Run actions specified on kernel command line. */

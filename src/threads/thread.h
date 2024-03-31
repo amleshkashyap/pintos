@@ -20,18 +20,33 @@ enum thread_status
    You can redefine this to whatever type you like. */
 typedef int tid_t;
 typedef int pid_t;
+typedef int mapid_t;
 #define TID_ERROR ((tid_t) -1)          /* Error value for tid_t. */
 
 #define TNAME_MAX 32
 #define MAX_CHILDREN 10
 #define MAX_PRIORITY_DONATION 8
 #define MAX_OPEN_FD 10
+#define MAX_VADDR_MAPS 50
 #define INITIAL_FD 2                   /* 0 and 1 are reserved values for stdin/stdout */
 
 /* TODO: this is not handled cleanly, eg, for exec, child doesn't set this before doing a sema_up */
 struct children {
   pid_t pid;
   int exit_status;
+};
+
+enum vaddr_map_type {
+  MAP_LOAD_PAGES,
+  MAP_STACK_PAGES,
+  MAP_USER_FILES
+};
+
+struct vaddr_map {
+  enum vaddr_map_type mtype;
+  uint32_t *svaddr;
+  uint32_t *evaddr;
+  int fd;                          /* set to -1 for non-file mappings */
 };
 
 /* A kernel thread or user process.
@@ -146,6 +161,10 @@ struct thread
 
     /* parent does a sema_down and waits for exec'd child to complete load and do a sema_up */
     struct semaphore child_sema;
+
+    /* all mappings */
+    struct vaddr_map* vaddr_mappings[MAX_VADDR_MAPS];
+    int active_vaddr_maps;
   };
 
 /* If false (default), use round-robin scheduler.
