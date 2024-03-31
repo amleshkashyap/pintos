@@ -5,7 +5,9 @@
 struct swap {
   int pid;
   uint32_t *vaddr;
-  int start_sector;
 };
 
+void init_swap_table (void);
+size_t get_swapslot (void);
+void map_to_swapslot (int, int, uint32_t *);
 #endif /* vm/swap.h */

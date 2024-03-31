@@ -551,6 +551,7 @@ push_arguments_to_stack (void **esp, char *program_name, int argc, char *args[])
 
   /* set the stack pointer back to the current address */
   *esp = t_esp;
+  // *esp = PHYS_BASE - 8192;    // use this for an unallocated vaddr
   /* hex dump for debugging */
   // hex_dump (*esp, *esp, counter, true);
   // printf("*esp set at: %x, esp: %x, &esp: %x, bytes: %d\n", *esp, esp, &esp, counter);

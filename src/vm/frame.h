@@ -14,7 +14,6 @@
 struct frame {
   uint32_t *address;      // physical memory address
   uint32_t *pte;          // PTE for the frame
-  bool dirty;
   int pid;                // primary holder process
   int shared;             // number of processes shared with
   int shared_pids[10];    // pid of upto 10 processes

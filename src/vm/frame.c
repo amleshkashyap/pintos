@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stddef.h>
 #include "vm/frame.h"
+#include "userprog/pagedir.h"
 #include "threads/malloc.h"
 #include "threads/thread.h"
 
@@ -62,7 +63,7 @@ evict_page (void)
   struct frame *frm;
   for (int i = 0; i < total_user_pages; i++) {
     frm = *(framelist + i);
-    if (frm->dirty == false) {
+    if (!pte_is_dirty (frm->pte)) {
       slot = i;
       *(framelist + i) = 0;
       pagedir_clear_page (get_thread_by_pid (frm->pid)->pagedir, frm->pte);

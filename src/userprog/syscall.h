@@ -2,10 +2,9 @@
 #define USERPROG_SYSCALL_H
 
 #include <stdbool.h>
+#include "threads/thread.h"
 
 void syscall_init (void);
-typedef int pid_t;
-
 
 /* File Operations */
 bool create (const char *, unsigned);
@@ -23,5 +22,9 @@ pid_t exec (const char *);
 int wait (pid_t);
 void exit (int);
 void halt (void);
+
+/* Virtual Memory Management */
+mapid_t mmap (int, void *);
+void munmap (mapid_t);
 
 #endif /* userprog/syscall.h */

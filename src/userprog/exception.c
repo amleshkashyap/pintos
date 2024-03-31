@@ -4,6 +4,8 @@
 #include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "threads/pte.h"
+#include "userprog/pagedir.h"
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -156,6 +158,18 @@ page_fault (struct intr_frame *f)
           not_present ? "not present" : "rights violation",
           write ? "writing" : "reading",
           user ? "user" : "kernel");
+
+  /* to test the section, set the esp to PHYS_BASE - 10000 for a pte with value zero
+   * for a pte in swap, other tests */
+  if (user && not_present) {
+    struct thread *cur = thread_current ();
+    uint32_t *pte = pagedir_get_pte (cur->pagedir, fault_addr);
+    if (pte_in_swap (pte)) {
+      /* if page is in swap, then this is not a page fault */
+      // return;
+    }
+  }
+
   kill (f);
 }
 

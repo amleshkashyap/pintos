@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <syscall-nr.h>
 #include "threads/interrupt.h"
-#include "threads/thread.h"
+//#include "threads/thread.h"
 #include "threads/pte.h"
 #include "filesys/filesys.h"
 
@@ -274,4 +274,23 @@ unsigned
 tell (int fd)
 {
   return file_tell (get_file (fd));
+}
+
+mapid_t
+mmap (int fd, void *addr)
+{
+  if (fd == 0 || fd == 1) return -1;
+  if (!is_valid_fd (fd)) return -1;
+  if (!is_mappable_vaddr (addr)) return -1;
+
+  mapid_t mapping = allocate_vaddr_mapid ();
+  int pages = filesize (fd) / PGSIZE;
+  set_vaddr_map (mapping, MAP_USER_FILES, addr, pages, fd);
+  return mapping;
+}
+
+void
+munmap (mapid_t mapping)
+{
+  free_vaddr_map (mapping);
 }
