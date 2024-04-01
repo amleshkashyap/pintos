@@ -169,6 +169,7 @@ syscall_handler (struct intr_frame *f)
           f->eax = -1;
           return;
         }
+
         f->eax = mmap (fd, vaddr);
         return;
       }
@@ -297,12 +298,14 @@ tell (int fd)
 mapid_t
 mmap (int fd, void *addr)
 {
+  if (filesize (fd) == 0) return -1;
   mapid_t mapping = allocate_vaddr_mapid ();
   int pages = (filesize (fd) / PGSIZE) + 1;
   if (pages > 1) {
     /* TODO: support more than 1 page, requires more synchronisation */
     return -1;
   }
+
   if (!write_file_to_vaddr (mapping, MAP_USER_FILES, addr, pages, fd)) {
     free_vaddr_map (mapping);
     return -1;
@@ -313,5 +316,5 @@ mmap (int fd, void *addr)
 void
 munmap (mapid_t mapping)
 {
-  free_vaddr_map (mapping);
+  clear_vaddr_map_and_pte (mapping);
 }

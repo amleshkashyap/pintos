@@ -115,6 +115,7 @@ pagedir_set_page (uint32_t *pd, void *upage, void *kpage, bool writable)
   ASSERT (vtop (kpage) >> PTSHIFT < init_ram_pages);
   ASSERT (pd != init_page_dir);
 
+  // printf("creating mapping for vaddr: %p to paddr: %p, for thread: %d\n", upage, kpage, thread_current ()->tid);
   pte = lookup_page (pd, upage, true);
 
   if (pte != NULL) {
@@ -170,7 +171,7 @@ pagedir_get_page (uint32_t *pd, const void *uaddr)
 void
 pagedir_clear_page (uint32_t *pd, void *upage) 
 {
-  printf("Clearing page with address: %p\n", upage);
+  // printf("Clearing page with address: %p, for tid: %d\n", upage, thread_current ()->tid);
   uint32_t *pte;
 
   ASSERT (pg_ofs (upage) == 0);

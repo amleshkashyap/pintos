@@ -42,6 +42,18 @@ write_file_to_vaddr (mapid_t mapping, enum vaddr_map_type mtype, uint32_t *addr,
   return true;
 }
 
+void
+clear_vaddr_map_and_pte (mapid_t mapping)
+{
+  /* it's a thread method */
+  struct vaddr_map *vmap = thread_current ()->vaddr_mappings[mapping];
+  int pages = (vmap->evaddr - vmap->svaddr) / PGSIZE;
+  for (int i = 0; i < pages; i++) {
+    // pagedir_clear_page (vmap->svaddr + i * PGSIZE);
+  }
+  free_vaddr_map (mapping);
+}
+
 void *
 bring_from_swap (pid_t pid, uint32_t *vaddr)
 {

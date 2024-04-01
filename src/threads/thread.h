@@ -163,6 +163,8 @@ struct thread
     struct semaphore child_sema;
 
     /* all mappings */
+    uint32_t *code_segment;
+    uint32_t *data_segment;
     struct vaddr_map* vaddr_mappings[MAX_VADDR_MAPS];
     int active_vaddr_maps;
   };
@@ -239,5 +241,11 @@ int allocate_fd (void);
 void free_fd (int);
 struct file * get_file (int);
 void set_file (int, struct file*);
+
+/* for mmap */
+bool is_mappable_vaddr (void *);
+mapid_t allocate_vaddr_mapid (void);
+void free_vaddr_map (mapid_t);
+void set_vaddr_map (mapid_t, enum vaddr_map_type, uint32_t *, int, int);
 
 #endif /* threads/thread.h */

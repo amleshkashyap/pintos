@@ -1222,7 +1222,7 @@ set_file (int fd, struct file *t_file)
 }
 
 bool
-is_overlapping_vaddr (uint32_t *vaddr)
+is_overlapping_vaddr (void *vaddr)
 {
   struct thread *cur = thread_current ();
   if (cur->active_vaddr_maps > 0) {
@@ -1238,10 +1238,13 @@ is_overlapping_vaddr (uint32_t *vaddr)
 }
 
 bool
-is_mappable_vaddr (uint32_t *vaddr)
+is_mappable_vaddr (void *vaddr)
 {
-  // if (vaddr % PGSIZE != 0) return false;            /* not aligned at page boundary */
-  if (vaddr < PHYS_BASE - PGSIZE) return false;     /* trying to overwrite first stack page */
+  if (vaddr == 0 || vaddr == NULL) return false;
+  // if (check_page_alignment) return false;            /* not aligned at page boundary */
+  if (vaddr >= PHYS_BASE - PGSIZE) return false;     /* trying to overwrite first stack page */
+  struct thread *cur = thread_current ();
+  if (vaddr >= cur->code_segment && vaddr <= cur->data_segment) return false;
   if (is_overlapping_vaddr (vaddr)) return false;   /* any overlaps with other mappings, stack pages or load time pages */
   return true;
 }
