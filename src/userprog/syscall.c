@@ -3,6 +3,7 @@
 #include <syscall-nr.h>
 #include "threads/interrupt.h"
 //#include "threads/thread.h"
+#include "vm/page.h"
 #include "threads/pte.h"
 #include "filesys/filesys.h"
 
@@ -160,6 +161,23 @@ syscall_handler (struct intr_frame *f)
         f->eax = tell (fd);
         return;
       }
+    case SYS_MMAP:
+      {
+        int fd = get_argument (cur->pagedir, esp, 1, sizeof (int));
+        void *vaddr = get_argument (cur->pagedir, esp, 2, sizeof (void *));
+        if (!is_valid_fd (fd) || !is_mappable_vaddr (vaddr)) {
+          f->eax = -1;
+          return;
+        }
+        f->eax = mmap (fd, vaddr);
+        return;
+      }
+    case SYS_MUNMAP:
+      {
+        mapid_t mapping = get_argument (cur->pagedir, esp, 1, sizeof (mapid_t));
+        munmap (mapping);
+        return;
+      }
     default:
       break;
   }
@@ -279,13 +297,16 @@ tell (int fd)
 mapid_t
 mmap (int fd, void *addr)
 {
-  if (fd == 0 || fd == 1) return -1;
-  if (!is_valid_fd (fd)) return -1;
-  if (!is_mappable_vaddr (addr)) return -1;
-
   mapid_t mapping = allocate_vaddr_mapid ();
-  int pages = filesize (fd) / PGSIZE;
-  set_vaddr_map (mapping, MAP_USER_FILES, addr, pages, fd);
+  int pages = (filesize (fd) / PGSIZE) + 1;
+  if (pages > 1) {
+    /* TODO: support more than 1 page, requires more synchronisation */
+    return -1;
+  }
+  if (!write_file_to_vaddr (mapping, MAP_USER_FILES, addr, pages, fd)) {
+    free_vaddr_map (mapping);
+    return -1;
+  }
   return mapping;
 }
 

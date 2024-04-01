@@ -1275,12 +1275,12 @@ free_vaddr_map (mapid_t mapid)
 void
 set_vaddr_map (mapid_t mapid, enum vaddr_map_type mtype, uint32_t *vaddr, int pages, int fd)
 {
-  struct vaddr_map vmap;
-  vmap.mtype = mtype;
-  vmap.svaddr = vaddr;
-  vmap.evaddr = vaddr + pages * PGSIZE;
-  vmap.fd = fd;
-  thread_current ()->vaddr_mappings[mapid] = &vmap;
+  struct vaddr_map *vmap = malloc (sizeof (struct vaddr_map));
+  vmap->mtype = mtype;
+  vmap->svaddr = vaddr;
+  vmap->evaddr = vaddr + pages * PGSIZE;
+  vmap->fd = fd;
+  thread_current ()->vaddr_mappings[mapid] = vmap;
 }
 
 

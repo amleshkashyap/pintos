@@ -165,8 +165,7 @@ page_fault (struct intr_frame *f)
     struct thread *cur = thread_current ();
     uint32_t *pte = pagedir_get_pte (cur->pagedir, fault_addr);
     if (pte_in_swap (pte)) {
-      /* if page is in swap, then this is not a page fault */
-      // return;
+      if (bring_from_swap (thread_current ()->pid, pte)) return;
     }
   }
 
