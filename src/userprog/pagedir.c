@@ -5,6 +5,8 @@
 #include "threads/init.h"
 #include "threads/pte.h"
 #include "threads/palloc.h"
+#include "threads/thread.h"
+#include "vm/swap.h"
 
 static uint32_t *active_pd (void);
 static void invalidate_pagedir (uint32_t *);
@@ -43,6 +45,10 @@ pagedir_destroy (uint32_t *pd)
           if (*pte & PTE_P) {
             clear_frame (pte_get_page (*pte));
             palloc_free_page (pte_get_page (*pte));
+          } else if (pte_in_swap (pte)) {
+            int slot = find_in_swap (thread_current ()->pid, pte);
+            ASSERT (slot != -1);
+            free_swapslot (slot);
           }
         }
         palloc_free_page (pt);

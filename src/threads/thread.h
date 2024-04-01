@@ -27,7 +27,7 @@ typedef int mapid_t;
 #define MAX_CHILDREN 10
 #define MAX_PRIORITY_DONATION 8
 #define MAX_OPEN_FD 10
-#define MAX_VADDR_MAPS 50
+#define MAX_VADDR_MAPS 10
 #define INITIAL_FD 2                   /* 0 and 1 are reserved values for stdin/stdout */
 
 /* TODO: this is not handled cleanly, eg, for exec, child doesn't set this before doing a sema_up */
