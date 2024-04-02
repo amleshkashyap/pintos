@@ -46,6 +46,7 @@ pagedir_destroy (uint32_t *pd)
             clear_frame (pte_get_page (*pte));
             palloc_free_page (pte_get_page (*pte));
           } else if (pte_in_swap (pte)) {
+            /* TODO: store the swap slot in pte 20 bits at the time of swapping */
             int slot = find_in_swap (thread_current ()->pid, pte);
             ASSERT (slot != -1);
             free_swapslot (slot);
@@ -139,7 +140,6 @@ page_is_valid (uint32_t *pte)
 uint32_t *
 pagedir_get_pte (uint32_t *pd, const void *uaddr)
 {
-  uint32_t *pte;
   ASSERT (is_user_vaddr (uaddr));
   return lookup_page (pd, uaddr, false);
 }
