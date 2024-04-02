@@ -211,10 +211,11 @@ write (int fd, const void *buffer, unsigned size)
   /* break down large buffers is not handled */
   if (fd == 1) {
     putbuf (buffer, size);
+    return size;
   } else {
+    // int ss = file_write (get_file (fd), buffer, size);
     return file_write (get_file (fd), buffer, size);
   }
-  return size;
 }
 
 void
@@ -298,15 +299,11 @@ tell (int fd)
 mapid_t
 mmap (int fd, void *addr)
 {
-  if (filesize (fd) == 0) return -1;
+  int fsize = filesize (fd);
+  if (fsize == 0) return -1;
   mapid_t mapping = allocate_vaddr_mapid ();
-  int pages = (filesize (fd) / PGSIZE) + 1;
-  if (pages > 1) {
-    /* TODO: support more than 1 page, requires more synchronisation */
-    return -1;
-  }
 
-  if (!write_file_to_vaddr (mapping, MAP_USER_FILES, addr, pages, fd)) {
+  if (!write_file_to_vaddr (mapping, MAP_USER_FILES, addr, fsize, fd)) {
     free_vaddr_map (mapping);
     return -1;
   }
@@ -316,5 +313,6 @@ mmap (int fd, void *addr)
 void
 munmap (mapid_t mapping)
 {
+  write_back_to_file (mapping);
   clear_vaddr_map_and_pte (mapping);
 }

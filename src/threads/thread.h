@@ -47,6 +47,8 @@ struct vaddr_map {
   uint32_t *svaddr;
   uint32_t *evaddr;
   int fd;                          /* set to -1 for non-file mappings */
+  int filesize;
+  unsigned file_start;
 };
 
 /* A kernel thread or user process.
