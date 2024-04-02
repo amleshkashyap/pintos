@@ -213,7 +213,7 @@ write (int fd, const void *buffer, unsigned size)
     putbuf (buffer, size);
     return size;
   } else {
-    // int ss = file_write (get_file (fd), buffer, size);
+    if (tell (fd) != 0) seek (fd, 0);
     return file_write (get_file (fd), buffer, size);
   }
 }

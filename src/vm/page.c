@@ -7,6 +7,11 @@
 /* there's no compilation errors for unknown function calls, and a proper runtime error is not present */
 #include "userprog/pagedir.h"
 
+/* This module serves as an intermediary between user page accesses (pagedir.c) and user programs (process.c, thread.c)
+ *   all user memory allocations (outside of basic setup) for mmap and stack increment must go via this
+ *   all virtual address accesses and updates go via this module
+ */
+
 void *
 get_user_page (bool zero)
 {
@@ -28,16 +33,94 @@ free_user_page (void *paddr)
 }
 
 bool
+is_overlapping_vaddr (void *vaddr)
+{
+  struct thread *cur = thread_current ();
+  if (cur->active_vaddr_maps > 0) {
+    struct vaddr_map *vmap;
+    for (int i = 0; i < MAX_VADDR_MAPS; i++) {
+      if (cur->vaddr_mappings[i] != NULL) {
+        vmap = cur->vaddr_mappings[i];
+        if (vaddr >= vmap->svaddr && vaddr <= vmap->evaddr) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/* this might be a restrictive way to handle stack space, and the error message in mmap
+ *   should suggest to the user that they can't use this vaddr */
+bool
+is_stack_vaddr (void *vaddr)
+{
+  return vaddr >= (PHYS_BASE - MAX_STACK_PAGES * PGSIZE);
+}
+
+bool
+is_mappable_vaddr (void *vaddr)
+{
+  if (vaddr == 0 || vaddr == NULL) return false;
+  if ((uint32_t) vaddr % PGSIZE != 0) return false;
+  if (is_stack_vaddr (vaddr)) return false;     /* trying to overwrite reserved stack pages */
+
+  struct thread *cur = thread_current ();
+  if (vaddr >= cur->code_segment && vaddr <= cur->data_segment) return false;
+  if (is_overlapping_vaddr (vaddr)) return false;   /* any overlaps with other mappings, stack pages or load time pages */
+  return true;
+}
+
+mapid_t
+allocate_vaddr_mapid (void)
+{
+  struct thread *cur = thread_current ();
+  if (cur->active_vaddr_maps == MAX_VADDR_MAPS) return -1;
+
+  for (int i = 0; i < MAX_VADDR_MAPS; i++) {
+    if (cur->vaddr_mappings[i] == NULL) {
+      cur->active_vaddr_maps++;
+      return i;
+    }
+  }
+
+  return -1;
+}
+
+void
+free_vaddr_map (mapid_t mapid)
+{
+  struct thread *cur = thread_current ();
+  struct vaddr_map *vmap = cur->vaddr_mappings[mapid];
+  cur->vaddr_mappings[mapid] = NULL;
+  cur->active_vaddr_maps--;
+  free (vmap);
+}
+
+void
+set_vaddr_map (mapid_t mapid, enum vaddr_map_type mtype, uint32_t *vaddr, int filesize, int fd)
+{
+  struct vaddr_map *vmap = malloc (sizeof (struct vaddr_map));
+  int pages = filesize / PGSIZE + 1;
+  vmap->mtype = mtype;
+  vmap->svaddr = vaddr;
+  vmap->evaddr = INCR_VADDR (vaddr, pages);
+  vmap->fd = fd;
+  vmap->filesize = filesize;
+  thread_current ()->vaddr_mappings[mapid] = vmap;
+}
+
+bool
 write_file_to_vaddr (mapid_t mapping, enum vaddr_map_type mtype, uint32_t *addr, int filesize, int fd)
 {
   /* handle freeing of pages if all pages can't be acquired, and then free the map */
   uint32_t *page;
   struct thread *cur = thread_current ();
-  int pages = filesize / PGSIZE + 1;
+  int pages = filesize / PGSIZE;
+  if (filesize % PGSIZE != 0) pages += 1;
+
   for (int i = 0; i < pages; i++) {
     page = get_user_page (false);
     if (page == NULL) return false;
-    pagedir_set_page (cur->pagedir, addr + i * (PGSIZE/4), page, true);
+    pagedir_set_page (cur->pagedir, INCR_VADDR (addr, i), page, true);
   }
 
 
@@ -55,7 +138,7 @@ write_file_to_vaddr (mapid_t mapping, enum vaddr_map_type mtype, uint32_t *addr,
 
   /* mark page as not dirty */
   for (int i = 0; i < pages; i++) {
-    pagedir_set_dirty (cur->pagedir, addr + i * PGSIZE, false);
+    pagedir_set_dirty (cur->pagedir, INCR_VADDR (addr, i), false);
   }
   return true;
 }
@@ -66,9 +149,10 @@ clear_vaddr_map_and_pte (mapid_t mapping)
   struct thread *cur = thread_current ();
   /* it's a thread method - TODO: place the methods as required */
   struct vaddr_map *vmap = cur->vaddr_mappings[mapping];
-  int pages = (vmap->evaddr - vmap->svaddr) / PGSIZE;
+  int pages = vmap->filesize / PGSIZE;
+  if (vmap->filesize % PGSIZE != 0) pages += 1;
   for (int i = 0; i < pages; i++) {
-    pagedir_clear_page (cur->pagedir, vmap->svaddr + i * (PGSIZE/4));
+    pagedir_clear_page (cur->pagedir, INCR_VADDR (vmap->svaddr, i));
   }
   free_vaddr_map (mapping);
 }
@@ -91,6 +175,18 @@ write_back_to_file (mapid_t mapping)
     }
     seek (vmap->fd, 0);
   }
+}
+
+bool
+allocate_next_stack_page (void)
+{
+  struct thread *cur = thread_current ();
+  if (cur->allocated_stack_pages >= MAX_STACK_PAGES) return false;
+  void *page = get_user_page (false);
+  if (page == NULL) return false;
+  cur->allocated_stack_pages++;
+  pagedir_set_page (cur->pagedir, PHYS_BASE - (cur->allocated_stack_pages * PGSIZE), page, true);
+  return true;
 }
 
 void *
