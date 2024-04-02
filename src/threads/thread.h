@@ -38,7 +38,6 @@ struct children {
 
 enum vaddr_map_type {
   MAP_LOAD_PAGES,
-  MAP_STACK_PAGES,
   MAP_USER_FILES
 };
 
@@ -167,6 +166,7 @@ struct thread
     /* all mappings */
     uint32_t *code_segment;
     uint32_t *data_segment;
+    int allocated_stack_pages;
     struct vaddr_map* vaddr_mappings[MAX_VADDR_MAPS];
     int active_vaddr_maps;
   };
@@ -243,11 +243,5 @@ int allocate_fd (void);
 void free_fd (int);
 struct file * get_file (int);
 void set_file (int, struct file*);
-
-/* for mmap */
-bool is_mappable_vaddr (void *);
-mapid_t allocate_vaddr_mapid (void);
-void free_vaddr_map (mapid_t);
-void set_vaddr_map (mapid_t, enum vaddr_map_type, uint32_t *, int, int);
 
 #endif /* threads/thread.h */

@@ -73,6 +73,10 @@
                   -> Set the PTE obtained above to the address of given 4kB page (kpage)
     ```
 
+  * All the memory allocations done in kernel mode (eg, frame allocations during system call) during the execution of a user program via
+    malloc will fetch the space from kernel pool and no paging is in place.
+    - However, memory allocations are also done using palloc\_get\_page in kernel mode (during system calls) in which case above is not true.
+
 ## Frame And Page Table Discussion
   * New Page
     - If user pool has pages left, then palloc will return a page, else it'll return NULL.
