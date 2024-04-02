@@ -5,6 +5,8 @@
 #include "threads/init.h"
 #include "threads/pte.h"
 #include "threads/palloc.h"
+#include "threads/thread.h"
+#include "vm/swap.h"
 
 static uint32_t *active_pd (void);
 static void invalidate_pagedir (uint32_t *);
@@ -39,9 +41,17 @@ pagedir_destroy (uint32_t *pd)
         uint32_t *pt = pde_get_pt (*pde);
         uint32_t *pte;
         
-        for (pte = pt; pte < pt + PGSIZE / sizeof *pte; pte++)
-          if (*pte & PTE_P) 
+        for (pte = pt; pte < pt + PGSIZE / sizeof *pte; pte++) {
+          if (*pte & PTE_P) {
+            clear_frame (pte_get_page (*pte));
             palloc_free_page (pte_get_page (*pte));
+          } else if (pte_in_swap (pte)) {
+            /* TODO: store the swap slot in pte 20 bits at the time of swapping */
+            int slot = find_in_swap (thread_current ()->pid, pte);
+            ASSERT (slot != -1);
+            free_swapslot (slot);
+          }
+        }
         palloc_free_page (pt);
       }
   palloc_free_page (pd);
@@ -106,16 +116,32 @@ pagedir_set_page (uint32_t *pd, void *upage, void *kpage, bool writable)
   ASSERT (vtop (kpage) >> PTSHIFT < init_ram_pages);
   ASSERT (pd != init_page_dir);
 
+  // printf("creating mapping for vaddr: %p to paddr: %p, for thread: %d\n", upage, kpage, thread_current ()->tid);
   pte = lookup_page (pd, upage, true);
 
-  if (pte != NULL) 
-    {
-      ASSERT ((*pte & PTE_P) == 0);
-      *pte = pte_create_user (kpage, writable);
-      return true;
-    }
-  else
+  if (pte != NULL) {
+    ASSERT ((*pte & PTE_P) == 0);
+    *pte = pte_create_user (kpage, writable);
+    /* get a frame mapping the kernel address to pte, and set it in the relevant slot
+     * NOTE: if no user pages are available, method returns false as of now, no page fault */
+    map_frame (pte_get_page (*pte), pte);
+    return true;
+  } else {
     return false;
+  }
+}
+
+bool
+page_is_valid (uint32_t *pte)
+{
+  return pte != NULL && (*pte & PTE_P) != 0;
+}
+
+uint32_t *
+pagedir_get_pte (uint32_t *pd, const void *uaddr)
+{
+  ASSERT (is_user_vaddr (uaddr));
+  return lookup_page (pd, uaddr, false);
 }
 
 /* Looks up the physical address that corresponds to user virtual
@@ -125,15 +151,17 @@ pagedir_set_page (uint32_t *pd, void *upage, void *kpage, bool writable)
 void *
 pagedir_get_page (uint32_t *pd, const void *uaddr) 
 {
-  uint32_t *pte;
+  // printf("Trying to get page: %p\n", uaddr);
+  uint32_t *pte = pagedir_get_pte (pd, uaddr);
 
-  ASSERT (is_user_vaddr (uaddr));
-  
-  pte = lookup_page (pd, uaddr, false);
-  if (pte != NULL && (*pte & PTE_P) != 0)
+  /* a valid page will always be in memory - eviction for swap marks page as invalid */
+  if (page_is_valid (pte)) {
     return pte_get_page (*pte) + pg_ofs (uaddr);
-  else
-    return NULL;
+  } else {
+    /* this is for the page fault handler */
+  }
+
+  return NULL;
 }
 
 /* Marks user virtual page UPAGE "not present" in page
@@ -143,17 +171,18 @@ pagedir_get_page (uint32_t *pd, const void *uaddr)
 void
 pagedir_clear_page (uint32_t *pd, void *upage) 
 {
+  // printf("Clearing page with address: %p, for tid: %d\n", upage, thread_current ()->tid);
   uint32_t *pte;
 
   ASSERT (pg_ofs (upage) == 0);
   ASSERT (is_user_vaddr (upage));
 
   pte = lookup_page (pd, upage, false);
-  if (pte != NULL && (*pte & PTE_P) != 0)
-    {
-      *pte &= ~PTE_P;
-      invalidate_pagedir (pd);
-    }
+  if (pte != NULL && (*pte & PTE_P) != 0) {
+    clear_frame (pte_get_page (*pte));
+    *pte &= ~PTE_P;
+    invalidate_pagedir (pd);
+  }
 }
 
 /* Returns true if the PTE for virtual page VPAGE in PD is dirty,
@@ -164,7 +193,7 @@ bool
 pagedir_is_dirty (uint32_t *pd, const void *vpage) 
 {
   uint32_t *pte = lookup_page (pd, vpage, false);
-  return pte != NULL && (*pte & PTE_D) != 0;
+  return pte_is_dirty (pte);
 }
 
 /* Set the dirty bit to DIRTY in the PTE for virtual page VPAGE
@@ -193,7 +222,7 @@ bool
 pagedir_is_accessed (uint32_t *pd, const void *vpage) 
 {
   uint32_t *pte = lookup_page (pd, vpage, false);
-  return pte != NULL && (*pte & PTE_A) != 0;
+  return pte_is_accessed (pte);
 }
 
 /* Sets the accessed bit to ACCESSED in the PTE for virtual page

@@ -54,6 +54,11 @@
     - Adds a mapping from user virtual address (say upage) to kernel virtual address (say kpage) in the page table. upage must not be
       already mapped and kpage is to be obtained from user pool. Page should ideally be writable by user.
 
+  * pagedir, pte and vaddr methods - These are not required heavily for this project. Usage of these methods can be checked to understand
+    how and where to utilise them (eg, pagedir\_get\_page for checking if a page is allocated within a process for a memory address).
+    - exception methods - these need more understanding of register and interrupt infra.
+    - All these methods are given in vm readme.
+
   * filesys\* and file\* methods - For file related system calls, these can be used without any modification, they handle the accounting
     for newly created files as well as number of file write denials. Mapping of the file created by filesys to fd has to be handled via the
     syscalls.
@@ -82,12 +87,18 @@
       now though, a child thread changes the data of its parent thread (parent reads the data of child thread).
     - Once the boundaries are checked, there's no other protective mechanisms.
 
+  * In this project, there aren't any major changes to the existing workflows, just some validations for system calls along with methods
+    for them (which is pretty much a linear thing). Only at a few places, additional code is added to setup the argument stack and
+    deny writes - in thread\_exit (), some changes are made to update the exit status of child thread and allowing writes.
+    - Majority of code changes rely on heavy usage of pointers for system call infra, managing the exit status and fd management.
+
 ## Synchronization
   * A semaphore is present for every thread which waits for exec'd child to finish loading.
   * In process\_wait, an infinite for loop runs and waits for a given tid to return a NULL value, meaning the thread is removed from the
     system (ie, killed), hence the executor can stop waiting - needs to be fixed to be same as wait (as it has to return exit status) - for
     now though, it's only used by kernel thread and hence works fine.
   * wait syscall is similar, but it exits once the child's exit\_status becomes different from -2 (the initial value).
+    - Currently, there's no synchronization for writing the exit
 
 ## Concerns
   * Certain tests don't work with 2MB filesys hence its changed to 4MB by default.
@@ -95,6 +106,8 @@
   * FDs are kept to max of 10 per process - in multi-oom, upto 126 fds are attempted for allocation.
   * FD management methods are added in threads directory, but they maybe somewhere else too.
   * A process can't exec more than 10 children, even though they've died -> it must wait for them if it wants to clean such children.
+  * Memory validity checks and handling of corresponding page fault/exception should be done using the second way.
+  * Other missing validations - checking for size of program name.
 
 ## Program Startup
   * 80x86 Calling Convention

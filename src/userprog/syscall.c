@@ -2,7 +2,8 @@
 #include <stdio.h>
 #include <syscall-nr.h>
 #include "threads/interrupt.h"
-#include "threads/thread.h"
+//#include "threads/thread.h"
+#include "vm/page.h"
 #include "threads/pte.h"
 #include "filesys/filesys.h"
 
@@ -160,6 +161,24 @@ syscall_handler (struct intr_frame *f)
         f->eax = tell (fd);
         return;
       }
+    case SYS_MMAP:
+      {
+        int fd = get_argument (cur->pagedir, esp, 1, sizeof (int));
+        void *vaddr = get_argument (cur->pagedir, esp, 2, sizeof (void *));
+        if (!is_valid_fd (fd) || !is_mappable_vaddr (vaddr)) {
+          f->eax = -1;
+          return;
+        }
+
+        f->eax = mmap (fd, vaddr);
+        return;
+      }
+    case SYS_MUNMAP:
+      {
+        mapid_t mapping = get_argument (cur->pagedir, esp, 1, sizeof (mapid_t));
+        munmap (mapping);
+        return;
+      }
     default:
       break;
   }
@@ -192,10 +211,11 @@ write (int fd, const void *buffer, unsigned size)
   /* break down large buffers is not handled */
   if (fd == 1) {
     putbuf (buffer, size);
+    return size;
   } else {
+    if (tell (fd) != 0) seek (fd, 0);
     return file_write (get_file (fd), buffer, size);
   }
-  return size;
 }
 
 void
@@ -274,4 +294,25 @@ unsigned
 tell (int fd)
 {
   return file_tell (get_file (fd));
+}
+
+mapid_t
+mmap (int fd, void *addr)
+{
+  int fsize = filesize (fd);
+  if (fsize == 0) return -1;
+  mapid_t mapping = allocate_vaddr_mapid ();
+
+  if (!write_file_to_vaddr (mapping, MAP_USER_FILES, addr, fsize, fd)) {
+    free_vaddr_map (mapping);
+    return -1;
+  }
+  return mapping;
+}
+
+void
+munmap (mapid_t mapping)
+{
+  write_back_to_file (mapping);
+  clear_vaddr_map_and_pte (mapping);
 }

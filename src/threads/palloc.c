@@ -10,6 +10,7 @@
 #include "threads/loader.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "vm/frame.h"
 
 /* Page allocator.  Hands out memory in page-size (or
    page-multiple) chunks.  See malloc.h for an allocator that
@@ -36,6 +37,8 @@ struct pool
 /* Two pools: one for kernel data, one for user pages. */
 static struct pool kernel_pool, user_pool;
 
+static size_t user_pages;
+
 static void init_pool (struct pool *, void *base, size_t page_cnt,
                        const char *name);
 static bool page_from_pool (const struct pool *, void *page);
@@ -49,7 +52,7 @@ palloc_init (size_t user_page_limit)
   uint8_t *free_start = ptov (1024 * 1024);
   uint8_t *free_end = ptov (init_ram_pages * PGSIZE);
   size_t free_pages = (free_end - free_start) / PGSIZE;
-  size_t user_pages = free_pages / 2;
+  user_pages = free_pages / 2;
   size_t kernel_pages;
   if (user_pages > user_page_limit)
     user_pages = user_page_limit;
@@ -57,8 +60,19 @@ palloc_init (size_t user_page_limit)
 
   /* Give half of memory to kernel, half to user. */
   init_pool (&kernel_pool, free_start, kernel_pages, "kernel pool");
-  init_pool (&user_pool, free_start + kernel_pages * PGSIZE,
-             user_pages, "user pool");
+  init_pool (&user_pool, free_start + kernel_pages * PGSIZE, user_pages, "user pool");
+}
+
+size_t
+get_user_pages (void)
+{
+  return user_pages;
+}
+
+void *
+get_userpool_base (void)
+{
+  return user_pool.base;
 }
 
 /* Obtains and returns a group of PAGE_CNT contiguous free pages.
