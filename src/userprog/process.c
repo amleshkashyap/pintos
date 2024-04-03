@@ -325,6 +325,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
               uint32_t file_page = phdr.p_offset & ~PGMASK;
               thread_current ()->code_segment = (uint32_t *) file_page;
               uint32_t mem_page = phdr.p_vaddr & ~PGMASK;
+              thread_current ()->end_code_segment = (uint32_t *) mem_page;
               uint32_t page_offset = phdr.p_vaddr & PGMASK;
               uint32_t read_bytes, zero_bytes;
               if (phdr.p_filesz > 0)
@@ -476,7 +477,6 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       upage += PGSIZE;
     }
 
-  /* TODO: check in ELF if this does captures the end of data segment? unit test might check only for start */
   thread_current ()->data_segment = (uint32_t *) upage;
   return true;
 }

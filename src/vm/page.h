@@ -15,6 +15,8 @@ bool write_file_to_vaddr (mapid_t, enum vaddr_map_type, uint32_t *, int, int);
 void write_back_to_file (mapid_t mapping);
 void clear_vaddr_map_and_pte (mapid_t mapping);
 
+void * bring_from_swap (pid_t, uint32_t *);
+
 bool allocate_next_stack_page (void);
 
 /* for mmap */

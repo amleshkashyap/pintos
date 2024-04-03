@@ -121,10 +121,12 @@ pagedir_set_page (uint32_t *pd, void *upage, void *kpage, bool writable)
 
   if (pte != NULL) {
     ASSERT ((*pte & PTE_P) == 0);
+    *pte &= ~PTE_S;
     *pte = pte_create_user (kpage, writable);
     /* get a frame mapping the kernel address to pte, and set it in the relevant slot
      * NOTE: if no user pages are available, method returns false as of now, no page fault */
-    map_frame (pte_get_page (*pte), pte);
+    // printf("mapping vaddr: %p, to paddr: %p, pte: %p, *pte: %p\n", upage, pte_get_page (*pte), pte, *pte);
+    map_frame (pte_get_page (*pte), pte, upage);
     return true;
   } else {
     return false;
@@ -169,7 +171,7 @@ pagedir_get_page (uint32_t *pd, const void *uaddr)
    bits in the page table entry are preserved.
    UPAGE need not be mapped. */
 void
-pagedir_clear_page (uint32_t *pd, void *upage) 
+pagedir_clear_page (uint32_t *pd, void *upage, bool mark_swapped) 
 {
   // printf("Clearing page with address: %p, for tid: %d\n", upage, thread_current ()->tid);
   uint32_t *pte;
@@ -181,6 +183,7 @@ pagedir_clear_page (uint32_t *pd, void *upage)
   if (pte != NULL && (*pte & PTE_P) != 0) {
     clear_frame (pte_get_page (*pte));
     *pte &= ~PTE_P;
+    if (mark_swapped) *pte |= PTE_S;
     invalidate_pagedir (pd);
   }
 }

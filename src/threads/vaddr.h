@@ -86,4 +86,12 @@ vtop (const void *vaddr)
   return (uintptr_t) vaddr - (uintptr_t) PHYS_BASE;
 }
 
+static inline int
+get_pages_for_size (int filesize)
+{
+  int pages = filesize / PGSIZE;
+  if (filesize % PGSIZE != 0) pages += 1;
+  return pages;
+}
+
 #endif /* threads/vaddr.h */

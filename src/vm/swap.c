@@ -60,7 +60,7 @@ find_in_swap (pid_t pid, uint32_t *vaddr)
   struct swap *nswap;
   int slot = -1;
   bool found;
-  
+
   for (int i = 0; i < swap_pages; i++) {
     nswap = *(swaplist + i);
     if (nswap->pid == pid && nswap->vaddr == vaddr) {
@@ -97,6 +97,7 @@ get_swapslot (void)
 {
   if (allocated_slots >= swap_pages) {
     /* TODO: cause a page fault */
+    printf("swapblock is full\n");
     return -1;
   }
 
@@ -119,13 +120,16 @@ get_swapslot (void)
 void
 free_swapslot (int slot)
 {
+  struct swap *nswap = *(swaplist + slot);
   *(swaplist + slot) = 0;
   allocated_slots--;
+  free (nswap);
 }
 
 void
 map_and_write_to_swapslot (int slot, pid_t pid, uint32_t *vaddr)
 {
+  // printf("mapping and write to swapslot: %d, pid: %d, addr: %p\n", slot, pid, vaddr);
   struct swap *nswap = malloc (sizeof (struct swap));
   nswap->pid = pid;
   nswap->vaddr = vaddr;

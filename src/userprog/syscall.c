@@ -202,6 +202,7 @@ int
 read (int fd, void *buffer, unsigned size)
 {
   /* TODO: where to read from when fd = 0 */
+  if (is_code_segment (buffer)) exit (-1);
   return file_read (get_file (fd), buffer, size);
 }
 
