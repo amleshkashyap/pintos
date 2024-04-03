@@ -20,7 +20,7 @@ get_user_page (bool zero)
   if (kpage == NULL) {
     /* evict a page from the framelist, free it from userpool and retry palloc method
      * alternatively, the evicted page is not freed from userpool and slot number can be used directly */
-    evict_page ();
+    int slot = evict_page ();
     kpage = palloc_get_page (flag);
   }
   return kpage;
@@ -57,6 +57,18 @@ is_stack_vaddr (void *vaddr)
 }
 
 bool
+is_code_segment (void *vaddr)
+{
+  return (vaddr >= thread_current ()->code_segment && vaddr <= thread_current ()->end_code_segment);
+}
+
+bool
+is_data_segment (void *vaddr)
+{
+  return (vaddr >= thread_current ()->end_code_segment && vaddr <= thread_current ()->data_segment);
+}
+
+bool
 is_mappable_vaddr (void *vaddr)
 {
   if (vaddr == 0 || vaddr == NULL) return false;
@@ -64,7 +76,7 @@ is_mappable_vaddr (void *vaddr)
   if (is_stack_vaddr (vaddr)) return false;     /* trying to overwrite reserved stack pages */
 
   struct thread *cur = thread_current ();
-  if (vaddr >= cur->code_segment && vaddr <= cur->data_segment) return false;
+  if (is_code_segment (vaddr) || is_data_segment (vaddr)) return false;
   if (is_overlapping_vaddr (vaddr)) return false;   /* any overlaps with other mappings, stack pages or load time pages */
   return true;
 }
@@ -99,7 +111,7 @@ void
 set_vaddr_map (mapid_t mapid, enum vaddr_map_type mtype, uint32_t *vaddr, int filesize, int fd)
 {
   struct vaddr_map *vmap = malloc (sizeof (struct vaddr_map));
-  int pages = filesize / PGSIZE + 1;
+  int pages = get_pages_for_size (filesize);
   vmap->mtype = mtype;
   vmap->svaddr = vaddr;
   vmap->evaddr = INCR_VADDR (vaddr, pages);
@@ -114,8 +126,7 @@ write_file_to_vaddr (mapid_t mapping, enum vaddr_map_type mtype, uint32_t *addr,
   /* handle freeing of pages if all pages can't be acquired, and then free the map */
   uint32_t *page;
   struct thread *cur = thread_current ();
-  int pages = filesize / PGSIZE;
-  if (filesize % PGSIZE != 0) pages += 1;
+  int pages = get_pages_for_size (filesize);
 
   for (int i = 0; i < pages; i++) {
     page = get_user_page (false);
@@ -149,10 +160,9 @@ clear_vaddr_map_and_pte (mapid_t mapping)
   struct thread *cur = thread_current ();
   /* it's a thread method - TODO: place the methods as required */
   struct vaddr_map *vmap = cur->vaddr_mappings[mapping];
-  int pages = vmap->filesize / PGSIZE;
-  if (vmap->filesize % PGSIZE != 0) pages += 1;
+  int pages = get_pages_for_size (vmap->filesize);
   for (int i = 0; i < pages; i++) {
-    pagedir_clear_page (cur->pagedir, INCR_VADDR (vmap->svaddr, i));
+    pagedir_clear_page (cur->pagedir, INCR_VADDR (vmap->svaddr, i), false);
   }
   free_vaddr_map (mapping);
 }
@@ -197,9 +207,9 @@ bring_from_swap (pid_t pid, uint32_t *vaddr)
     return false;
   }
 
-  if (get_from_swap (pid, vaddr, kpage) == false) {
-    return false;
-  }
+  if (get_from_swap (pid, (uint32_t *) pg_round_down (vaddr), kpage) == false) return false;
+
+  pagedir_set_page (thread_current ()->pagedir, pg_round_down (vaddr), kpage, true);
 
   return true;
 }

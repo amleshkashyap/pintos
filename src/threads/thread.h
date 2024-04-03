@@ -165,6 +165,7 @@ struct thread
 
     /* all mappings */
     uint32_t *code_segment;
+    uint32_t *end_code_segment;
     uint32_t *data_segment;
     int allocated_stack_pages;
     struct vaddr_map* vaddr_mappings[MAX_VADDR_MAPS];

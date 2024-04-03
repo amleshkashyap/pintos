@@ -157,9 +157,17 @@ page_fault (struct intr_frame *f)
     struct thread *cur = thread_current ();
     uint32_t *pte = pagedir_get_pte (cur->pagedir, fault_addr);
     if (pte_in_swap (pte)) {
-      if (bring_from_swap (thread_current ()->pid, pte)) return;
+      /* TODO: this is causing breakpoint exception */
+      if (bring_from_swap (thread_current ()->pid, fault_addr)) {
+        return;
+      }
     } else if (is_stack_vaddr (fault_addr)) {
-      if (allocate_next_stack_page ()) return;
+      if (abs (f->esp - fault_addr) > 32) {
+        /* TODO: are there other corner cases? */
+        exit (-1);
+      } else if (allocate_next_stack_page ()) {
+        return;
+      }
     } 
   }
 
